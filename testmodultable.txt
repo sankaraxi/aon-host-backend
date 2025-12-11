@@ -1,0 +1,37 @@
+CREATE TABLE aon.tests (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  test_name VARCHAR(255) NOT NULL,
+  description TEXT,
+  duration INT NOT NULL,
+  date DATE NOT NULL,
+  start_time TIME NOT NULL,
+  end_time TIME NOT NULL
+);
+ALTER TABLE aon.tests
+ADD COLUMN status ENUM('Active', 'Completed', 'Inactive') DEFAULT 'Active' AFTER end_time;
+CREATE TABLE aon.users (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    aon_id VARCHAR(100) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL
+);
+CREATE TABLE aon.test_assignments (
+    assignment_id INT AUTO_INCREMENT PRIMARY KEY,
+    test_id INT NOT NULL,
+    assigned_count INT NOT NULL,   -- number of users assigned
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (test_id) REFERENCES aon.tests(id) ON DELETE CASCADE
+);
+CREATE TABLE aon.test_assignment_users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    assignment_id INT NOT NULL,
+    user_id INT NOT NULL,
+    status ENUM('Assigned','Used','Unused') DEFAULT 'Assigned',
+    FOREIGN KEY (assignment_id) REFERENCES test_assignments(assignment_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+CREATE TABLE aon.license_track (
+    license_id INT AUTO_INCREMENT PRIMARY KEY,
+    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    number_of_license INT NOT NULL,
+    status ENUM('Credited','Debited') NOT NULL
+);
