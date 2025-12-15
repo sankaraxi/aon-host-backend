@@ -72,7 +72,9 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}_${file.originalname}`),
 });
 const upload = multer({ storage });
-app.post('/api/start', (req, res) => {
+
+
+app.post('/v2/start', (req, res) => {
   const { sessionId } = req.body;
   console.log("sessionId",sessionId)
   if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
@@ -94,7 +96,7 @@ app.post('/api/start', (req, res) => {
   return res.json({ message: 'Timer already running' });
 });
 
-app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
+app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     console.log("⏸️ Pause working");
   
     let sessionId;
@@ -156,7 +158,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
   
 
-  app.post('/api/timer', (req, res) => {
+  app.post('/v2/timer', (req, res) => {
     const { sessionId } = req.body;
     const session = sessions[sessionId];
     if (!session) return res.json({ remainingSeconds: 0, running: false });
@@ -179,7 +181,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
 
   // GET /user-log/:id
-  app.get('/api/time-left/:id', (req, res) => {
+  app.get('/v2/time-left/:id', (req, res) => {
   const userId = req.params.id;
   console.log("userId triggered", userId);
 
@@ -204,7 +206,13 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
   });
 
-  app.post("/api/login",(req,res)=>{
+    // Assuming Express is set up
+  app.get('/v2/heartbeat', (req, res) => {
+    res.status(200).json({ status: 'ok' });
+  });
+  
+
+  app.post("/v2/login",(req,res)=>{
     let{username,password}=req.body
     let loginsql='select * from cocube_user where emailid=?'
     con.query(loginsql,[username],(error,result)=>{
@@ -259,7 +267,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     })
   })
 
-  app.post('/api/run-Assesment', async (req, res) => {
+  app.post('/v2/run-Assesment', async (req, res) => {
     const { userId, framework } = req.body;
     console.log(userId, framework)
     try {
@@ -339,7 +347,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     }
   });
 
-  app.post('/api/run-Assesment-2', async (req, res) => {
+  app.post('/v2/run-Assesment-2', async (req, res) => {
     const { userId, framework } = req.body;
     console.log(userId, framework)
     try {
@@ -418,7 +426,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     }
   });
 
-  app.post('/api/run-Assesment-1', async (req, res) => {
+  app.post('/v2/run-Assesment-1', async (req, res) => {
     const { userId, framework } = req.body;
     console.log(userId, framework)
     try {
@@ -495,7 +503,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     }
   });
 
-  app.post('/api/run-script', (req, res) => {
+  app.post('/v2/run-script', (req, res) => {
     const { userId, empNo, userName, question, framework, dockerPort, outputPort } = req.body;
   
     // Construct shell script path
@@ -548,7 +556,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
   
 
-  app.post('/api/cleanup-docker', async (req, res) => {
+  app.post('/v2/cleanup-docker', async (req, res) => {
     const { userId } = req.body;
   
     // path to your shell script
@@ -596,7 +604,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     }
   });
 
-  app.post('/api/cleanup-docker-2', async (req, res) => {
+  app.post('/v2/cleanup-docker-2', async (req, res) => {
     const { userId } = req.body;
   
     // Validate userId
@@ -657,7 +665,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
 
 
-  app.get('/api/results', (req, res) => {
+  app.get('/v2/results', (req, res) => {
 
 
     const sql = 'SELECT * FROM results ORDER BY result_time DESC';
@@ -675,7 +683,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   
   });
   
-  app.get('/api/results/:id', (req, res) => {
+  app.get('/v2/results/:id', (req, res) => {
   
       const id = req.params.id; // Get the ID from the request parameters
   
@@ -694,7 +702,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   
   });
 
-  app.post('/api/logout', async (req, res) => {
+  app.post('/v2/logout', async (req, res) => {
     const { userId } = req.body;
 
     // Validate userId
@@ -738,7 +746,7 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     }
   });
   
-  app.post('/api/candidate', async (req, res) => {
+  app.post('/v2/candidate', async (req, res) => {
     const { userId, name, employeeNo } = req.body;
   
     if (!userId || !name || !employeeNo) {
@@ -777,10 +785,12 @@ app.post('/api/pause/:userId/:sessionId/:timeLeft', (req, res) => {
       res.status(500).json({ error: 'Internal server error' });
     }
   });
+
+
 //Test Module Admin
 
 // Add test
-app.post("/api/tests", (req, res) => {
+app.post("/v2/tests", (req, res) => {
   const { test_name, description, duration, date, start_time, end_time, status } = req.body;
 
   const sql = `
@@ -802,8 +812,7 @@ app.post("/api/tests", (req, res) => {
 });
 
 // Get test details
-
-  app.get("/api/test-details", (req, res) => {
+  app.get("/v2/test-details", (req, res) => {
   const sql = `
     SELECT 
       t.id AS test_id,
@@ -829,202 +838,7 @@ app.post("/api/tests", (req, res) => {
 const uploaduser = multer({ dest: "uploads/" });
 
 
-// app.post("/api/assign-users", uploaduser.single("file"), (req, res) => {
-//   const { testId } = req.body;
-//   if (!testId || !req.file) {
-//     return res.status(400).json({ message: "test_id and Excel file are required" });
-//   }
-
-//   const XLSX = require("xlsx"); // Make sure XLSX is installed
-//   const workbook = XLSX.readFile(req.file.path);
-//   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-//   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-//   // Skip header row → extract AON IDs
-//   const aon_ids = rows.slice(1).map(r => r[0]).filter(Boolean);
-
-//   if (aon_ids.length === 0) {
-//     return res.status(400).json({ message: "No AON IDs found in Excel file" });
-//   }
-
-//   // Step 1: Get remaining license
-//   con.query(
-//     "SELECT remaining_license FROM license_track ORDER BY id DESC LIMIT 1",
-//     (err, licenseResult) => {
-//       if (err) return res.status(500).json({ message: "Database error" });
-
-//       const availableLicense = licenseResult.length > 0 ? licenseResult[0].remaining_license : 0;
-//       const overdue = aon_ids.length > availableLicense ? aon_ids.length - availableLicense : 0;
-
-//       // Step 2: Check duplicates across ALL tests
-//       con.query(
-//         `SELECT tau.aon_id, t.test_name 
-//          FROM test_assignment_users tau 
-//          JOIN tests t ON tau.test_id = t.id
-//          WHERE tau.aon_id IN (?)`,
-//         [aon_ids],
-//         (err, existingRows) => {
-//           if (err) return res.status(500).json({ message: "Database error" });
-
-//           // Map existing IDs to the test they are assigned to
-//           const duplicates = existingRows.map(row => ({
-//             aon_id: row.aon_id,
-//             test_name: row.test_name
-//           }));
-//           const existingIds = duplicates.map(d => d.aon_id);
-
-//           // Filter out new IDs to insert
-//           const newIds = aon_ids.filter(id => !existingIds.includes(id));
-
-//           if (newIds.length === 0) {
-//             return res.status(200).json({
-//               message: "No new users to assign (all duplicates across tests)",
-//               skipped: duplicates
-//             });
-//           }
-
-//           // Step 3: Insert new IDs
-//           const values = newIds.map(aon_id => [testId, aon_id, "Assigned"]);
-//           con.query(
-//             "INSERT INTO test_assignment_users (test_id, aon_id, status) VALUES ?",
-//             [values],
-//             (err, result) => {
-//               if (err) return res.status(500).json({ message: "Database insert error" });
-
-//               // Step 4: Update license
-//               con.query(
-//                 `UPDATE license_track 
-//                  SET remaining_license = remaining_license - ? 
-//                  WHERE id = (SELECT id FROM (SELECT id FROM license_track ORDER BY id DESC LIMIT 1) t)`,
-//                 [newIds.length],
-//                 (err2) => {
-//                   if (err2) return res.status(500).json({ message: "License update failed" });
-
-//                   res.json({
-//                     message: `✅ ${result.affectedRows} users assigned, ❌ ${duplicates.length} skipped${
-//                       overdue > 0 ? `, ⚠️ Overdue by ${overdue} licenses` : ""
-//                     }`,
-//                     inserted: result.affectedRows,
-//                     skipped: duplicates, // Each duplicate shows which test it is mapped to
-//                     overdue
-//                   });
-//                 }
-//               );
-//             }
-//           );
-//         }
-//       );
-//     }
-//   );
-// });
-
-// app.post("/api/assign-users", uploaduser.single("file"), (req, res) => {
-//   const { testId } = req.body;
-//   if (!testId || !req.file) {
-//     return res.status(400).json({ message: "test_id and Excel file are required" });
-//   }
-
-//   const XLSX = require("xlsx"); // Make sure XLSX is installed
-//   const workbook = XLSX.readFile(req.file.path);
-//   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-//   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-//   // Skip header row → extract AON IDs
-//   const aon_ids = rows.slice(1).map(r => r[0]).filter(Boolean);
-
-//   if (aon_ids.length === 0) {
-//     return res.status(400).json({ message: "No AON IDs found in Excel file" });
-//   }
-
-//   // Step 1: Get remaining license
-//   con.query(
-//     "SELECT remaining_license FROM license_track ORDER BY id DESC LIMIT 1",
-//     (err, licenseResult) => {
-//       if (err) return res.status(500).json({ message: "Database error" });
-
-//       const availableLicense = licenseResult.length > 0 ? licenseResult[0].remaining_license : 0;
-//       const overdue = aon_ids.length > availableLicense ? aon_ids.length - availableLicense : 0;
-
-//       // Step 2: Check duplicates across ALL tests
-//       con.query(
-//         `SELECT tau.aon_id, t.test_name, t.id AS test_id
-//          FROM test_assignment_users tau 
-//          JOIN tests t ON tau.test_id = t.id
-//          WHERE tau.aon_id IN (?)`,
-//         [aon_ids],
-//         (err, existingRows) => {
-//           if (err) return res.status(500).json({ message: "Database error" });
-
-//           // Map existing IDs
-//           const duplicates = existingRows.map(row => ({
-//             aon_id: row.aon_id,
-//             test_name: row.test_name,
-//             test_link: `http://localhost:5001/api/${row.test_id}/${row.aon_id}`
-//           }));
-
-//           const existingIds = duplicates.map(d => d.aon_id);
-
-//           // Filter out new IDs to insert
-//           const newIds = aon_ids.filter(id => !existingIds.includes(id));
-
-//           if (newIds.length === 0) {
-//             return res.status(200).json({
-//               message: "No new users to assign (all duplicates across tests)",
-//               skipped: duplicates
-//             });
-//           }
-
-//           // Step 3: Insert new IDs
-//           const values = newIds.map(aon_id => [testId, aon_id, "Assigned"]);
-//           con.query(
-//             "INSERT INTO test_assignment_users (test_id, aon_id, status) VALUES ?",
-//             [values],
-//             (err, result) => {
-//               if (err) return res.status(500).json({ message: "Database insert error" });
-
-//               // Step 3.1: Get test name for response
-//               con.query("SELECT test_name FROM tests WHERE id = ?", [testId], (err3, testRes) => {
-//                 if (err3 || testRes.length === 0) {
-//                   return res.status(500).json({ message: "Failed to fetch test name" });
-//                 }
-
-//                 const testName = testRes[0].test_name;
-
-//                 // Build new user JSON with test link
-//                 const newUsers = newIds.map(aon_id => ({
-//                   aon_id,
-//                   test_name: testName,
-//                   test_link: `http://localhost:5001/api/${testId}/${aon_id}`
-//                 }));
-
-//                 // Step 4: Update license
-//                 con.query(
-//                   `UPDATE license_track 
-//                    SET remaining_license = remaining_license - ? 
-//                    WHERE id = (SELECT id FROM (SELECT id FROM license_track ORDER BY id DESC LIMIT 1) t)`,
-//                   [newIds.length],
-//                   (err2) => {
-//                     if (err2) return res.status(500).json({ message: "License update failed" });
-
-//                     res.json({
-//                       message: `✅ ${result.affectedRows} users assigned, ❌ ${duplicates.length} skipped${overdue > 0 ? `, ⚠️ Overdue by ${overdue} licenses` : ""}`,
-//                       inserted: newUsers,
-//                       skipped: duplicates,
-//                       overdue
-//                     });
-//                   }
-//                 );
-//               });
-//             }
-//           );
-//         }
-//       );
-//     }
-//   );
-// });
-
-
-app.post("/api/assign-users", uploaduser.single("file"), (req, res) => {
+app.post("/v2/assign-users", uploaduser.single("file"), (req, res) => {
   const { testId } = req.body;
   if (!testId || !req.file) {
     return res.status(400).json({ message: "test_id and Excel file are required" });
@@ -1135,16 +949,48 @@ app.post("/api/assign-users", uploaduser.single("file"), (req, res) => {
   );
 });
 
-// app.post("/api/kggeniuslabs_registration", (req, res) => {
-//   console.log("📥 Received forwarded JSON:", req.body);
+// External API: accept payload from other server and assign a random test
+app.post('/v2/external/assign', async (req, res) => {
+  const payload = req.body || {};
+  const { session_id, aon_id, redirect_url, results_webhook, user_metadata } = payload;
 
-  
-//   res.json({
-//     success: true,
-//     message: "JSON received successfully",
-//     data: req.body,
-//   });
-// });
+  if (!session_id || !aon_id) {
+    return res.status(400).json({ error: 'Missing required fields: session_id or aon_id' });
+  }
+
+  try {
+    // store incoming request (if table exists or to be created)
+    try {
+      const insertReqSql = `INSERT INTO external_requests (session_id, aon_id, redirect_url, results_webhook, user_metadata)
+        VALUES (?, ?, ?, ?, ?)`;
+      await con.promise().query(insertReqSql, [session_id, aon_id, redirect_url || null, results_webhook || null, JSON.stringify(user_metadata || {})]);
+    } catch (e) {
+      // don't fail whole flow if logging the incoming request fails
+      console.warn('Could not insert into external_requests:', e.message);
+    }
+
+    // pick a random active test
+    const [tests] = await con.promise().query("SELECT id, test_name FROM tests WHERE status = 'Active' ORDER BY RAND() LIMIT 1");
+    if (!tests || tests.length === 0) {
+      return res.status(404).json({ error: 'No active tests available' });
+    }
+    const test = tests[0];
+
+    // build test link - prefer redirect_url if provided, otherwise build from env
+    const base = "https://assessment.kggeniuslabs.com/aon/"
+    const separator = base.includes('?') ? '&' : '?';
+    const test_link = `${base}${separator}test_id=${test.id}&session_id=${encodeURIComponent(session_id)}&aon_id=${encodeURIComponent(aon_id)}`;
+
+    // insert into test_assignment_users (store session_id and test_link)
+    const insertAssignSql = 'INSERT INTO test_assignment_users (test_id, aon_id, status, session_id, test_link) VALUES (?, ?, ?, ?, ?)';
+    await con.promise().query(insertAssignSql, [test.id, aon_id, 'Assigned', session_id, test_link]);
+
+    return res.json({ aon_id, session_id, test_id: test.id, test_name: test.test_name, test_link });
+  } catch (err) {
+    console.error('External assign error:', err);
+    return res.status(500).json({ error: 'Failed to assign test', details: err.message });
+  }
+});
 
 app.listen(process.env.PORT || 5000, () => { 
     console.log(`the port is running in ${process.env.PORT || 5000}`)
