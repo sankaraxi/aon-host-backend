@@ -23,7 +23,7 @@ version: '3.8'
 services:
   code-server:
     container_name: "code-server-a1l1q2-react-${USER_ID}"
-    image: "sankarkg/a1l1q2-react:latest"
+    image: "sankarkg/level-two-test:latest"
     ports:
       - "${DOCKER_PORT}:8080"
       - "${OUTPUT_PORT}:5173"
