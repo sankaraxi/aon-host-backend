@@ -32,11 +32,7 @@ services:
     environment:
       - WATCHPACK_POLLING=true
     command:
-        code-server \
-          --bind-addr 0.0.0.0:8080 \
-          --auth none \
-          --base-path /cs/${DOCKER_PORT} \
-          /home/coder/project
+        code-server --bind-addr 0.0.0.0:8080 --auth none /home/coder/project
     networks:
       - my_network
 
