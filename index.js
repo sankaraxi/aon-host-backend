@@ -984,7 +984,7 @@ app.post("/v2/assign-users", uploaduser.single("file"), (req, res) => {
 });
 
 // External API: accept payload from other server and assign a random test
-app.post('/v2/external/assign', async (req, res) => {
+app.post('/v2/external/assign',authenticateToken, async (req, res) => {
   const payload = req.body || {};
   const { session_id, aon_id, redirect_url, results_webhook, user_metadata } = payload;
 
