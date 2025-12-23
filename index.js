@@ -6,7 +6,10 @@ require("dotenv").config();
 const path = require('path');
 const cron = require('node-cron'); // ✅ Cron import here
 const app = express()
+const jwt = require('jsonwebtoken');
 const fs = require("fs");
+
+
 const { a1l1q2 } = require("./A1L1RQ02.js");
 const { a1l1q1 } = require("./A1L1RQ01.js");
 const { a1l1q3 } = require('./A1L1RQ03.js');
@@ -22,6 +25,25 @@ app.use(express.static('public'));
 const XLSX = require("xlsx");
 const multer = require("multer");
 
+// JWT config
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-change-in-prod';
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authorization header missing or malformed' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      console.error('JWT verify error:', err);
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+}
 
 // Database Connection for dashboard'
 app.use(cors({
@@ -213,58 +235,70 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   
 
   app.post("/v2/login",(req,res)=>{
-    let{username,password}=req.body
-    let loginsql='select * from cocube_user where emailid=?'
-    con.query(loginsql,[username],(error,result)=>{
-      if(error){
-        res.send({"status":"empty_set"})
-        console.log(error)
-      }
-      else if(result.length>0){
-        let dbusername=result[0].emailid
-        let dbpassword=result[0].password
-        let id=result[0].id
-        let role=result[0].role
-        let name=result[0].name
-        let question=result[0].assigned_question
-        let docker_port=result[0].docker_port
-        let output_port=result[0].output_port
-        let log_status=result[0].log_status
-        let empNo=result[0].employee_no
-        if(dbusername===username && dbpassword===password){
+   let{username,password}=req.body
+      let loginsql='select * from cocube_user where emailid=?'
+      con.query(loginsql,[username],(error,result)=>{
+        if(error){
+          res.send({"status":"empty_set"})
+          console.log(error)
+        }
+        else if(result.length>0){
+          let dbusername=result[0].emailid
+          let dbpassword=result[0].password
+          let id=result[0].id
+          let role=result[0].role
+          let name=result[0].name
+          let question=result[0].assigned_question
+          let docker_port=result[0].docker_port
+          let output_port=result[0].output_port
+          let empNo=result[0].employee_no
+          let submitted =result[0].submitted
+          if(dbusername===username && dbpassword===password){
 
-          if (log_status === 3) {
-            console.log("User already logged in");
-            return res.send({ "status": "already_logged_in" });
+            if (submitted === 1) {
+              console.log("User already logged in ans submitted");
+              return res.send({ "status": "already_logged_in" });
+            }
+            var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
+            con.query(insertcategory,[id , 1],(error,result)=>{
+                if(error){
+                    console.log(error)
+                    // res.send({"status":"error"})
+
+                }
+                else{
+                  console.log("inserted")
+                  //  res.send({"status":"inserted"})
+                }
+            })
+            
+            const tokenPayload = { id, role, email: dbusername, name };
+            const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '2h' });
+
+            res.send({
+              "status":"success",
+              "id":id,
+              "role":role,
+              "name":name,
+              "question":question,
+              "docker_port":docker_port,
+              "output_port":output_port,
+              "empNo": empNo,
+              "token": token
+            })
+            
+            console.log("sucess",id,role, name)
           }
-          var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-          con.query(insertcategory,[id , 1],(error,result)=>{
-              if(error){
-                  console.log(error)
-                  // res.send({"status":"error"})
-
-              }
-              else{
-                console.log("inserted")
-                //  res.send({"status":"inserted"})
-              }
-          })
-          
-          
-          res.send({"status":"success","id":id,"role":role,"name":name,"question":question,"docker_port":docker_port,"output_port":output_port,"empNo": empNo})
-          
-          console.log("sucess",id,role, name)
+          else{
+            res.send({"status":"invalid_user"})
+            console.log("notmatch")
+          }
         }
         else{
-          res.send({"status":"invalid_user"})
-          console.log("notmatch")
+          res.send({"status":"both_are_invalid"})
+          console.log("invaliald")
         }
-      }
-      else{
-        res.send({"status":"both_are_invalid"})
-        console.log("invaliald")
-      }
-    })
+      })
   })
 
   app.post('/v2/run-Assesment', async (req, res) => {
@@ -665,7 +699,7 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
 
 
-  app.get('/v2/results', (req, res) => {
+  app.get('/v2/results', authenticateToken, (req, res) => {
 
 
     const sql = 'SELECT * FROM results ORDER BY result_time DESC';
@@ -683,7 +717,7 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   
   });
   
-  app.get('/v2/results/:id', (req, res) => {
+  app.get('/v2/results/:id', authenticateToken, (req, res) => {
   
       const id = req.params.id; // Get the ID from the request parameters
   
