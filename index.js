@@ -301,6 +301,41 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
       })
   })
 
+  app.post("/v2/generate-token", (req, res) => {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: "username and password are required" });
+    }
+
+    const loginsql = 'select * from cocube_user where emailid=?';
+    con.query(loginsql, [username], (error, result) => {
+      if (error) {
+        console.error(error);
+        return res.status(500).json({ error: "Database error" });
+      }
+
+      if (!result || result.length === 0) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      const row = result[0];
+      const dbusername = row.emailid;
+      const dbpassword = row.password;
+      const id = row.id;
+      const role = row.role;
+      const name = row.name;
+
+      if (dbusername !== username || dbpassword !== password) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      const tokenPayload = { id, role, email: dbusername, name };
+      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '2h' });
+
+      return res.json({ token });
+    });
+  });
+
   app.post('/v2/run-Assesment', async (req, res) => {
     const { userId, framework } = req.body;
     console.log(userId, framework)
