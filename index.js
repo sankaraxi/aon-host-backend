@@ -301,7 +301,7 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
       })
   })
 
-   app.post("/api/generate-token", (req, res) => {
+   app.post("/v2/generate-token", (req, res) => {
   const { username, password } = req.body || {};
 
   if (!username || !password) {
