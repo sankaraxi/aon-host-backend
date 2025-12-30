@@ -301,40 +301,56 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
       })
   })
 
-  app.post("/v2/generate-token", (req, res) => {
-    const { username, password } = req.body || {};
-    if (!username || !password) {
-      return res.status(400).json({ error: "username and password are required" });
+   app.post("/api/generate-token", (req, res) => {
+  const { username, password } = req.body || {};
+
+  if (!username || !password) {
+    return res.status(400).json({ error: "username and password are required" });
+  }
+
+  const loginsql = 'SELECT * FROM cocube_user WHERE emailid = ?';
+
+  con.query(loginsql, [username], (error, result) => {
+    if (error) {
+      console.error(error);
+      return res.status(500).json({ error: "Database error" });
     }
 
-    const loginsql = 'select * from cocube_user where emailid=?';
-    con.query(loginsql, [username], (error, result) => {
-      if (error) {
-        console.error(error);
-        return res.status(500).json({ error: "Database error" });
-      }
+    if (!result || result.length === 0) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
 
-      if (!result || result.length === 0) {
-        return res.status(401).json({ error: "Invalid credentials" });
-      }
+    const row = result[0];
+    const { emailid, password: dbpassword, id, role, name } = row;
 
-      const row = result[0];
-      const dbusername = row.emailid;
-      const dbpassword = row.password;
-      const id = row.id;
-      const role = row.role;
-      const name = row.name;
+    // 🔐 Validate credentials
+    if (emailid !== username || dbpassword !== password) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
 
-      if (dbusername !== username || dbpassword !== password) {
-        return res.status(401).json({ error: "Invalid credentials" });
-      }
+    // 🚫 Role check — ONLY role === 1 allowed
+    if (role !== 1) {
+      return res.status(403).json({
+        error: "Access denied. User not authorized to generate token"
+      });
+    }
 
-      const tokenPayload = { id, role, email: dbusername, name };
-      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '2h' });
+    // 🪙 Generate JWT
+    const tokenPayload = {
+      id,
+      role,
+      email: emailid,
+      name
+    };
 
-      return res.json({ token });
+    const token = jwt.sign(tokenPayload, JWT_SECRET, {
+      expiresIn: "2h"
     });
+
+    return res.json({ token });
   });
+});
+
 
   app.post('/v2/run-Assesment', async (req, res) => {
     const { userId, framework } = req.body;
@@ -623,7 +639,6 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
       });
     });
   });
-  
 
   app.post('/v2/cleanup-docker', async (req, res) => {
     const { userId } = req.body;
