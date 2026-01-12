@@ -1,64 +1,35 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
+const con = require('.');
 
-async function a1l1q1(id, framework) {
-  console.log(id, framework);
-  
+async function a1l1q1(id,framework,outputPort) { 
+
+  // console.log("vanakam da mapla naan dhan output port test la irundhu", outputPort);
+  // console.log("inside test"); 
   // Define base URL based on framework
-  let baseURL = '';
-  if (id=== '6' && framework === 'react') {
-    baseURL = 'http://localhost:5177';
-  } else if (id=== '6' && framework === 'vue') {
-    baseURL = 'http://localhost:5178';
-  } else if (id=== '9' && framework === 'react') {
-    baseURL = 'http://localhost:5179';
-  } else if (id=== '9' && framework === 'vue') {
-    baseURL = 'http://localhost:5180';
-  } else if (id=== '12' && framework === 'react') {
-    baseURL = 'http://localhost:5185';
-  } else if (id=== '12' && framework === 'vue') {
-    baseURL = 'http://localhost:5186';
-  } 
   
-  else if (id=== '15' && framework === 'react') {
-    baseURL = 'http://localhost:5191';
-  } else if (id=== '15' && framework === 'vue') {
-    baseURL = 'http://localhost:5192';
-  } else if (id=== '18' && framework === 'react') {
-    baseURL = 'http://localhost:5197';
-  } else if (id=== '18' && framework === 'vue') {
-    baseURL = 'http://localhost:5198';
-  }else if (id=== '21' && framework === 'react') {
-    baseURL = 'http://localhost:5203';
-  }else if (id=== '21' && framework === 'vue') {
-    baseURL = 'http://localhost:5204';
+  let baseURL = '';
+//   baseURL="http://localhost:5173"
+  // if (id=== '6' && framework === 'react') {
+  //   baseURL = 'http://localhost:5177';
+  // } else if (id=== '6' && framework === 'vue') {
+  //   baseURL = 'http://localhost:5178';
+  // } else if (id=== '9' && framework === 'react') {
+  //   baseURL = 'http://localhost:5179';
+  // } else if (id=== '9' && framework === 'vue') {
+  //   baseURL = 'http://localhost:5180';
+  // } else if (id=== '12' && framework === 'react') {
+  //   baseURL = 'http://localhost:5185';
+  // } else if (id=== '12' && framework === 'vue') {
+  //   baseURL = 'http://localhost:5186';
+  // } 
+
+  if (outputPort) {
+    baseURL = `http://localhost:${outputPort}`;
   }
-  else if (id=== '24' && framework === 'react') {
-    baseURL = 'http://localhost:5209';
-  }else if (id=== '24' && framework === 'vue') {
-    baseURL = 'http://localhost:5210';
-  }else if (id=== '27' && framework === 'react') {
-    baseURL = 'http://localhost:5215';
-  }else if (id=== '27' && framework === 'vue') {
-    baseURL = 'http://localhost:5216';
-  }else if (id=== '30' && framework === 'react') {
-    baseURL = 'http://localhost:5221';
-  }else if (id=== '30' && framework === 'vue') {
-    baseURL = 'http://localhost:5222';
-  }else if (id=== '33' && framework === 'react') {
-    baseURL = 'http://localhost:5227';
-  }else if (id=== '33' && framework === 'vue') {
-    baseURL = 'http://localhost:5228';
-  }else if (id=== '36' && framework === 'react') {
-    baseURL = 'http://localhost:5233';
-  }else if (id=== '36' && framework === 'vue') {
-    baseURL = 'http://localhost:5234';
-  }else if (id=== '39' && framework === 'react') {
-    baseURL = 'http://localhost:5239';
-  }else if (id=== '39' && framework === 'vue') {
-    baseURL = 'http://localhost:5240';
-  }
+
+  console.log("naan da pudhu baseURL", baseURL);
   const browser = await chromium.launch();
   const page = await browser.newPage();
   await page.goto(baseURL);
@@ -108,6 +79,91 @@ async function a1l1q1(id, framework) {
     
   }
 
+  async function eventhandling() {
+    const browser = await chromium.launch(); 
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(baseURL);
+    // STEP 1: Click the "Add Personal Info" button
+    await page.click('.profilebutton');
+    // STEP 2: Wait for form to appear
+    try {
+      await page.waitForSelector('form#personalInfoForm', { timeout: 3000 });
+      console.log('✅ Modal form appeared');
+      return true
+    } catch (err) {
+      console.error('❌ Modal form did not appear in time.');
+      await browser.close();
+      return false;
+    }
+}
+
+async function datahandling() {
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  
+
+  await page.goto(baseURL);
+
+  // STEP 1: Click the "Add Personal Info" button
+  await page.click('.profilebutton');
+
+  // STEP 2: Wait for form to appear
+  try {
+    await page.waitForSelector('form#personalInfoForm', { timeout: 3000 });
+    console.log('✅ Modal form appeared');
+  } catch (err) {
+    console.error('❌ Modal form did not appear in time.');
+    await browser.close();
+    return false;
+  }
+
+  // STEP 3: Fill the form
+  await page.fill('input[name="name"]', 'John Doe');
+  await page.fill('input[name="email"]', 'john@example.com');
+  await page.fill('input[name="phone"]', '9876543210');
+  await page.fill('input[name="location"]', 'Chennai');
+
+  // STEP 4: Upload image if file exists
+  const imagePath = path.resolve(__dirname, 'test-image.jpg');
+  if (fs.existsSync(imagePath)) {
+    const imageInput = await page.$('input[name="image"]');
+    await imageInput.setInputFiles(imagePath);
+  }
+
+  // STEP 5: Submit the form
+  await page.click('button[type="submit"]');
+
+  // STEP 6: Wait for profile content to update
+  await page.waitForFunction(() => {
+    const nameEl = document.querySelector('.name');
+    return nameEl && nameEl.innerText === 'John Doe';
+  });
+
+  // STEP 7: Extract and verify data
+  const name = await page.textContent('.name');
+  const email = await page.textContent('.useremail');
+  const phone = await page.textContent('.userphonenumber');
+  const location = await page.textContent('.userLocation');
+
+  console.log({ name, email, phone, location });
+
+  if (
+    name.trim() === 'John Doe' &&
+    email.trim() === 'john@example.com' &&
+    phone.trim() === '9876543210' &&
+    location.trim() === 'Chennai'
+  ) {
+    console.log('✅ Personal info form is working correctly.');
+    await browser.close();
+    return true;
+  } else {
+    console.error('❌ Mismatch in displayed info.');
+    await browser.close();
+    return false;
+  }
+}
   // Responsiveness test function
   async function responsivenessTest() {
     const viewportResults = [];
@@ -272,32 +328,23 @@ async function a1l1q1(id, framework) {
       name: 'Concurrent Load Time',
       selector: 'html',
       score: performanceResult.score || 0,  // from load test
-      category: 'Efficiency',
+      category: 'Code Structure & Cleanliness',
       check: performanceTest
     },
       {
         name: 'Responsiveness',
         selector: 'body',
         score: responsivenessResult.score || 0,  // from viewport checks
-        category: 'Efficiency',
+        category: 'Code Structure & Cleanliness',
         check: responsivenessTest
       },
-    //  {
-    //   name: 'background color - container',
-    //   selector: '.backgroundpart',
-    //   property: 'background-image',
-    //   expectedValue: 'url("../assets/blogcardbg.png")',
-    //   score: 5,
-    //   category: 'Essential',
-    //   check: checkElementColor,
-    // },
-    {
+       {
         name: 'Background Image Min height',
         selector: '.backgroundpart',
         property: 'padding',
         expectedValue: '20px',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'padding', expectedValue = '20px') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -307,7 +354,7 @@ async function a1l1q1(id, framework) {
         property: 'display',
         expectedValue: 'flex',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'display', expectedValue = 'flex') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -317,7 +364,7 @@ async function a1l1q1(id, framework) {
         property: 'justify-content',
         expectedValue: 'center',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'justify-content', expectedValue = 'center') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -327,7 +374,7 @@ async function a1l1q1(id, framework) {
         property: 'align-items',
         expectedValue: 'center',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'align-items', expectedValue = 'center') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -337,7 +384,7 @@ async function a1l1q1(id, framework) {
         property: 'border-radius',
         expectedValue: '15px',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'border-radius', expectedValue = '15px') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -347,7 +394,7 @@ async function a1l1q1(id, framework) {
         property: 'padding',
         expectedValue: '30px 20px',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'padding', expectedValue = '30px 20px') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -357,7 +404,7 @@ async function a1l1q1(id, framework) {
         property: 'max-width',
         expectedValue: '400px',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'max-width', expectedValue = '400px') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -367,7 +414,7 @@ async function a1l1q1(id, framework) {
         property: 'text-align',
         expectedValue: 'center',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'text-align', expectedValue = 'center') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -377,7 +424,7 @@ async function a1l1q1(id, framework) {
         property: 'width',
         expectedValue: '100px',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'width', expectedValue = '100px') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -387,7 +434,7 @@ async function a1l1q1(id, framework) {
         property: 'height',
         expectedValue: '100px',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'height', expectedValue = '100px') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -397,7 +444,7 @@ async function a1l1q1(id, framework) {
         property: 'border-radius',
         expectedValue: '50%',
         score: 5,
-        category: 'Essential',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'border-radius', expectedValue = '50%') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -407,7 +454,7 @@ async function a1l1q1(id, framework) {
         property: 'width',
         expectedValue: '80px',
         score: 5,
-        category: 'Required',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'width', expectedValue = '80px') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
@@ -417,51 +464,41 @@ async function a1l1q1(id, framework) {
         property: 'background-color',
         expectedColor: 'rgb(230, 249, 252)',
         score: 5,
-        category: 'Required',
+        category: 'CSS Expertise',
         check: (page, selector, _, property = 'background-color', expectedValue = 'rgb(230, 249, 252)') =>
                 checkCssProperty(page, selector, property, expectedValue),
       },
-    {
-      name: 'HTML Semantics - Basic Structure - HTML Structure Validation',
-      selector: 'html',
-      score: 5,
-      category: 'Required',
-      check: checkHtmlStructure
-    },
+    // {
+    //   name: 'HTML Semantics - Basic Structure - HTML Structure Validation',
+    //   selector: 'html',
+    //   score: 5,
+    //   category: 'Required',
+    //   check: checkHtmlStructure
+    // },
     {
       name: 'CSS - Structure of a Page',
       selector: '.backgroundpart',
       property: 'background-size',
       expectedValue: 'cover',
       score: 5,
-      category: 'Required',
+      category: 'CSS Expertise',
       check: (page, selector, _, property = 'background-size', expectedValue = 'cover') =>
         checkCssProperty(page, selector, property, expectedValue),
     },
-    // {
-    //   name: 'Aesthetics Elements - Box Shadow',
-    //   selector: '.tech-card',
-    //   property: 'box-shadow',
-    //   expectedValue: '0 4px 15px rgba(0, 0, 0, 0.08)',
-    //   score: 5,
-    //   category: 'Required',
-    //   check: async (page, selector, _, property = 'box-shadow', expectedValue = '0 4px 15px rgba(0, 0, 0, 0.08)') => {
-    //     await page.waitForSelector(selector); // Wait for the element to appear
-    //     return checkCssProperty(page, selector, property, expectedValue);}
-    // },
-    // {
-    //   name: 'CSS Style - Smoothness & Performance',
-    //   selector: '.product-card.tech-card:hover',
-    //   property: 'transform',
-    //   expectedValue: 'translateY(-5px)',
-    //   score: 5,
-    //   category: 'Required',
-    //   check: async (page, selector, _, property = 'transform', expectedValue = 'translateY(-5px)') => {
-    //     await page.hover(selector);
-    //     await page.waitForTimeout(500);
-    //     return checkCssProperty(page, selector, property, expectedValue);
-    //   }
-    // },
+    {
+        name: 'Java Script - Data Handling',
+        selector: 'html',
+        score: 5,  // from load test
+        category: 'Java Script ',
+        check: datahandling
+      },
+      {
+        name: 'Java Script - Event Handling',
+        selector: 'html',
+        score: 5,  // from load test
+        category: 'Java Script ',
+        check: eventhandling
+      },
   ];
 
   const scoreByCategory = {};
@@ -529,5 +566,5 @@ async function a1l1q1(id, framework) {
     EvaluationDetails: detailedResults,
   };
 }
-
+// })();
 module.exports = { a1l1q1 };

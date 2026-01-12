@@ -204,28 +204,28 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
 
   // GET /user-log/:id
   app.get('/v2/time-left/:id', (req, res) => {
-  const userId = req.params.id;
-  console.log("userId triggered", userId);
+    const userId = req.params.id;
+    console.log("userId triggered", userId);
 
-  const sql = 'SELECT log_status, closing_time_ms FROM cocube_user WHERE id = ?';
+    const sql = 'SELECT log_status, closing_time_ms FROM launch_tokens WHERE id = ?';
 
-  con.query(sql, [userId], (err, result) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Internal server error' });
-    }
+    con.query(sql, [userId], (err, result) => {
+      if (err) {
+        console.error('Database error:', err);
+        return res.status(500).json({ error: 'Internal server error' });
+      }
 
-    if (result.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+      if (result.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
 
-    const user = result[0]; 
-    res.json({
-      id: userId,
-      log_status: user.log_status,
-      closing_time_ms: user.closing_time_ms
+      const user = result[0]; 
+      res.json({
+        id: userId,
+        log_status: user.log_status,
+        closing_time_ms: user.closing_time_ms
+      });
     });
-  });
   });
 
     // Assuming Express is set up
@@ -351,12 +351,11 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
 });
 
-
   app.post('/v2/run-Assesment', async (req, res) => {
-    const { userId, framework } = req.body;
+    const { userId, framework, outputPort } = req.body;
     console.log(userId, framework)
     try {
-      const results = await a1l1q3(userId,framework);
+      const results = await a1l1q3(userId,framework, outputPort);
       
       res.json({ detailedResults: results });
 
@@ -433,10 +432,10 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
 
   app.post('/v2/run-Assesment-2', async (req, res) => {
-    const { userId, framework } = req.body;
+    const { userId, framework, outputPort } = req.body;
     console.log(userId, framework)
     try {
-      const results = await a1l1q2(userId,framework);
+      const results = await a1l1q2(userId,framework, outputPort);
       res.json({ detailedResults: results });
 
       const overallResult = calculateOverallScores(results);
@@ -512,10 +511,10 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   });
 
   app.post('/v2/run-Assesment-1', async (req, res) => {
-    const { userId, framework } = req.body;
+    const { userId, framework, outputPort } = req.body;
     console.log(userId, framework)
     try {
-      const results = await a1l1q1(userId,framework);
+      const results = await a1l1q1(userId,framework, outputPort);
       res.json({ detailedResults: results });
       
       const overallResult = calculateOverallScores(results);
