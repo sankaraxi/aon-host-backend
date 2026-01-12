@@ -1223,5 +1223,4 @@ app.get("/v2/aon/resolve", async (req, res) => {
 
 app.listen(process.env.PORT || 5000, () => { 
     console.log(`the port is running in ${process.env.PORT || 5000}`)
-
 })
