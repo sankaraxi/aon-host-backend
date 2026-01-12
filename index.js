@@ -130,88 +130,88 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 
-app.post('/v2/start', (req, res) => {
-  const { sessionId } = req.body;
-  console.log("sessionId",sessionId)
-  if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+  app.post('/v2/start', (req, res) => {
+    const { sessionId } = req.body;
+    console.log("sessionId",sessionId)
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
 
-  const session = sessions[sessionId];
-  if (!session) {
-    sessions[sessionId] = {
-      startedAt: Date.now(),
-      remainingMs: DURATION
-    };
-    return res.json({ message: 'Timer started' });
-  }
-
-  if (!session.startedAt && session.remainingMs > 0) {
-    session.startedAt = Date.now();
-    return res.json({ message: 'Timer resumed' });
-  }
-
-  return res.json({ message: 'Timer already running' });
-});
-
-app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
-    console.log("⏸️ Pause working");
-  
-    let sessionId;
-    let timeLeft;
-    let newTimeleft;
-    try {
-      // sessionId = typeof req.body === 'string'
-      //   ? JSON.parse(req.body).sessionId
-      //   : req.body.sessionId;
-      sessionId = req.params.sessionId;
-      timeLeft = req.params.timeLeft;
-      newTimeleft = timeLeft*1000;
-      console.log("timeleft",timeLeft)
-      console.log("newTimeleft",newTimeleft)
-      console.log("sessionId",sessionId)
-       console.log(`⏸️ Paused session ${sessionId} with ${newTimeleft} ms left`);
-  
-    const userId = req.params.userId;
-  
-    // Store remainingMs into DB
-    const updateQuery = `UPDATE cocube_user SET log_status=2, closing_time_ms = ? WHERE id = ?`;
-    con.query(updateQuery, [newTimeleft, userId], (err, result) => {
-      if (err) {
-        console.error("❌ DB update failed:", err);
-        return res.status(500).json({ error: 'Database update failed' });
-      }
-  
-      console.log(`✅ Updated user ${userId} with closing_time_ms = ${newTimeleft}`);
-      return res.json({ message: 'Paused and DB updated', remainingMs: newTimeleft });
-    });
-
-    var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-      con.query(insertcategory,[userId , 6],(error,result)=>{
-        if(error){
-            console.log(error)
-            // res.send({"status":"error"})
-
-        }
-        else{
-          console.log("inserted")
-          //  res.send({"status":"inserted"})
-        }
-      })
-    } catch {
-      return res.status(400).json({ error: 'Invalid pause data' });
+    const session = sessions[sessionId];
+    if (!session) {
+      sessions[sessionId] = {
+        startedAt: Date.now(),
+        remainingMs: DURATION
+      };
+      return res.json({ message: 'Timer started' });
     }
-  
-    // const session = sessions[sessionId];
-    // if (!session || !session.startedAt) {
-    //   return res.json({ message: 'No active timer' });
-    // }
-    // let newTimeleft = timeLeft*1000;
-    // console.log("newTimeleft",newTimeleft)
-    // const elapsed = Date.now() - session.startedAt;
-    // session.remainingMs = Math.max(0, session.remainingMs - elapsed);
-    // session.startedAt = null;
-  
-    
+
+    if (!session.startedAt && session.remainingMs > 0) {
+      session.startedAt = Date.now();
+      return res.json({ message: 'Timer resumed' });
+    }
+
+    return res.json({ message: 'Timer already running' });
   });
+
+  app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
+      console.log("⏸️ Pause working");
+    
+      let sessionId;
+      let timeLeft;
+      let newTimeleft;
+      try {
+        // sessionId = typeof req.body === 'string'
+        //   ? JSON.parse(req.body).sessionId
+        //   : req.body.sessionId;
+        sessionId = req.params.sessionId;
+        timeLeft = req.params.timeLeft;
+        newTimeleft = timeLeft*1000;
+        console.log("timeleft",timeLeft)
+        console.log("newTimeleft",newTimeleft)
+        console.log("sessionId",sessionId)
+        console.log(`⏸️ Paused session ${sessionId} with ${newTimeleft} ms left`);
+    
+      const userId = req.params.userId;
+    
+      // Store remainingMs into DB
+      const updateQuery = `UPDATE cocube_user SET log_status=2, closing_time_ms = ? WHERE id = ?`;
+      con.query(updateQuery, [newTimeleft, userId], (err, result) => {
+        if (err) {
+          console.error("❌ DB update failed:", err);
+          return res.status(500).json({ error: 'Database update failed' });
+        }
+    
+        console.log(`✅ Updated user ${userId} with closing_time_ms = ${newTimeleft}`);
+        return res.json({ message: 'Paused and DB updated', remainingMs: newTimeleft });
+      });
+
+      var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
+        con.query(insertcategory,[userId , 6],(error,result)=>{
+          if(error){
+              console.log(error)
+              // res.send({"status":"error"})
+
+          }
+          else{
+            console.log("inserted")
+            //  res.send({"status":"inserted"})
+          }
+        })
+      } catch {
+        return res.status(400).json({ error: 'Invalid pause data' });
+      }
+    
+      // const session = sessions[sessionId];
+      // if (!session || !session.startedAt) {
+      //   return res.json({ message: 'No active timer' });
+      // }
+      // let newTimeleft = timeLeft*1000;
+      // console.log("newTimeleft",newTimeleft)
+      // const elapsed = Date.now() - session.startedAt;
+      // session.remainingMs = Math.max(0, session.remainingMs - elapsed);
+      // session.startedAt = null;
+    
+      
+    });
   
 
   app.post('/v2/timer', (req, res) => {

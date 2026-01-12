@@ -345,26 +345,26 @@ async function a1l1q2(id, framework,outputPort) {
       check: (page, selector, _, property = 'max-width', expectedValue = '600px') =>
         checkCssProperty(page, selector, property, expectedValue),
     },
-    // {
-    //   name: 'Profile Card - Color',
-    //   selector: '.profile-card',
-    //   property: 'color',
-    //   expectedValue: 'rgb(91, 44, 111)',
-    //   score: 5,
-    //   category: 'CSS Styling, Animations & Effects',
-    //   check: checkElementColor,
-    //   expectedColor: '#5b2c6f'
-    // },
-    // {
-    //   name: 'Background Color - Body',
-    //   selector: 'body',
-    //   property: 'background-color',
-    //   expectedValue: 'rgb(244, 236, 247)',
-    //   score: 5,
-    //   category: 'CSS Styling, Animations & Effects',
-    //   check: (page, selector, _, property = 'background-color', expectedValue = 'rgb(244, 236, 247)') =>
-    //     checkCssProperty(page, selector, property, expectedValue),
-    // },
+    {
+      name: 'Profile Card - Color',
+      selector: '.profile-card',
+      property: 'color',
+      expectedValue: 'rgb(91, 44, 111)',
+      score: 5,
+      category: 'CSS Expertise',
+      check: checkElementColor,
+      expectedColor: '#5b2c6f'
+    },
+    {
+      name: 'Background Color - Body',
+      selector: 'body',
+      property: 'background-color',
+      expectedValue: 'rgb(244, 236, 247)',
+      score: 5,
+      category: 'CSS Expertise',
+      check: (page, selector, _, property = 'background-color', expectedValue = 'rgb(244, 236, 247)') =>
+        checkCssProperty(page, selector, property, expectedValue),
+    },
     {
       name: 'Profile Name - Font Size',
       selector: '.profile-name',
@@ -415,16 +415,16 @@ async function a1l1q2(id, framework,outputPort) {
       check: (page, selector, _, property = 'margin-bottom', expectedValue = '32px') =>
         checkCssProperty(page, selector, property, expectedValue),
     },
-    // {
-    //   name: 'Skill Heading - Color',
-    //   selector: '.skills-heading',
-    //   property: 'color',
-    //   expectedValue: 'rgb(142, 68, 173)',
-    //   score: 5,
-    //   category: 'CSS Styling, Animations & Effects',
-    //   check: checkElementColor,
-    //   expectedColor: '#8e44ad'
-    // },
+    {
+      name: 'Skill Heading - Color',
+      selector: '.skills-heading',
+      property: 'color',
+      expectedValue: 'rgb(142, 68, 173)',
+      score: 5,
+      category: 'CSS Expertise',
+      check: checkElementColor,
+      expectedColor: '#8e44ad'
+    },
     {
       name: 'Skill Heading - Text Align',
       selector: '.skills-heading',

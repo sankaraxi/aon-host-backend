@@ -541,7 +541,7 @@ async function a1l1q3(id, framework, outputPort) {
       property: 'color',
       expectedValue: 'rgb(0, 0, 0)',
       score: 5,
-      category: 'CSS Styling, Animations & Effects',
+      category: 'CSS Expertise',
       check: (page, selector, _, property = 'color', expectedValue = 'rgb(0, 0, 0)') =>
         checkElementColor(page, selector, '#000000', 'color'),
       expectedColor: '#000000'
@@ -552,7 +552,7 @@ async function a1l1q3(id, framework, outputPort) {
       property: 'backgroundColor',
       expectedValue: 'rgb(255, 255, 255)',
       score: 5,
-      category: 'CSS Styling, Animations & Effects',
+      category: 'CSS Expertise',
       check: checkElementColor,
       expectedColor: '#ffffff'
     },
@@ -562,7 +562,7 @@ async function a1l1q3(id, framework, outputPort) {
       property: 'color',
       expectedValue: 'rgb(241, 241, 241)',
       score: 5,
-      category: 'CSS Styling, Animations & Effects',
+      category: 'CSS Expertise',
       check: async (page, selector, expectedColor) => {
         await page.click('.toggle-theme-btn');
         await page.waitForTimeout(500);
@@ -616,7 +616,7 @@ async function a1l1q3(id, framework, outputPort) {
       property: 'backgroundColor',
       expectedValue: 'rgb(108, 52, 131)',
       score: 5,
-      category: 'CSS Styling, Animations & Effects',
+      category: 'CSS Expertise',
       check: checkElementColor,
       expectedColor: '#6c3483'
     },
