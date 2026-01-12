@@ -25,6 +25,8 @@ app.use(express.static('public'));
 const XLSX = require("xlsx");
 const multer = require("multer");
 
+const crypto = require('crypto');
+
 // JWT config
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-change-in-prod';
 
@@ -70,6 +72,11 @@ function basicAuth(req, res, next) {
   req.authUser = username;
   next();
 }
+
+function generateOpaqueToken() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
 
 // Database Connection for dashboard'
 app.use(cors({
