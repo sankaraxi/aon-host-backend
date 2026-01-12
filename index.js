@@ -77,6 +77,7 @@ app.use(cors({
   methods: ['GET', 'POST'],
   credentials: true
 }));
+
 const con = mysql.createPool({
     host: process.env.DB_HOST,
     port: "3306",
@@ -773,7 +774,7 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     }
   });
 
-  app.get('/v2/results', authenticateToken, (req, res) => {
+  app.get('/v2/results', basicAuth, (req, res) => {
 
 
     const sql = 'SELECT * FROM results ORDER BY result_time DESC';
@@ -791,7 +792,7 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
   
   });
   
-  app.get('/v2/results/:id', authenticateToken, (req, res) => {
+  app.get('/v2/results/:id', basicAuth, (req, res) => {
   
       const id = req.params.id; // Get the ID from the request parameters
   
