@@ -39,7 +39,7 @@ function calculateOverallScores(data) {
   // Round all scores to 2 decimal places for readability
   return {
     AvgLoadTime: data.AvgLoadTime,
-    verallCodeStructureScore: parseFloat(overallEssentialScore.toFixed(2)),
+    OverallCodeStructureScore: parseFloat(overallEssentialScore.toFixed(2)),
     OverallCSSScore: parseFloat(overallEfficiencyScore.toFixed(2)),
     OverallJavascriptScore: parseFloat(overallRequiredScore.toFixed(2)),
     TotalScore: parseFloat(totalScore.toFixed(2))
