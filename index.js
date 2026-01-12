@@ -28,6 +28,9 @@ const multer = require("multer");
 // JWT config
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-change-in-prod';
 
+const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER;
+const BASIC_AUTH_PASS = process.env.BASIC_AUTH_PASS;
+
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -43,6 +46,29 @@ function authenticateToken(req, res, next) {
     req.user = user;
     next();
   });
+}
+
+function basicAuth(req, res, next) {
+  const authHeader = req.headers['authorization'];
+
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    return res.status(401).json({ error: 'Authorization header missing or not Basic' });
+  }
+
+  const base64Credentials = authHeader.split(' ')[1];
+  const decoded = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+  const [username, password] = decoded.split(':');
+
+  if (
+    username !== BASIC_AUTH_USER ||
+    password !== BASIC_AUTH_PASS
+  ) {
+    return res.status(403).json({ error: 'Invalid username or password' });
+  }
+
+  // attach minimal identity if needed later
+  req.authUser = username;
+  next();
 }
 
 // Database Connection for dashboard'
@@ -747,7 +773,6 @@ app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
     }
   });
 
-
   app.get('/v2/results', authenticateToken, (req, res) => {
 
 
@@ -1033,47 +1058,168 @@ app.post("/v2/assign-users", uploaduser.single("file"), (req, res) => {
 });
 
 // External API: accept payload from other server and assign a random test
-app.post('/v2/external/assign',authenticateToken, async (req, res) => {
+app.post('/v2/external/assign',basicAuth, async (req, res) => {
   const payload = req.body || {};
-  const { session_id, aon_id, redirect_url, results_webhook, user_metadata } = payload;
+    const { session_id, aon_id, redirect_url, results_webhook, user_metadata } = payload;
 
-  if (!session_id || !aon_id) {
-    return res.status(400).json({ error: 'Missing required fields: session_id or aon_id' });
-  }
+    if (!session_id || !aon_id) {
+      return res.status(400).json({ error: 'Missing required fields: session_id or aon_id' });
+    }
 
-  try {
-    // store incoming request (if table exists or to be created)
+    // log request (non-blocking)
     try {
-      const insertReqSql = `INSERT INTO external_requests (session_id, aon_id, redirect_url, results_webhook, user_metadata)
-        VALUES (?, ?, ?, ?, ?)`;
-      await con.promise().query(insertReqSql, [session_id, aon_id, redirect_url || null, results_webhook || null, JSON.stringify(user_metadata || {})]);
+      await con.promise().query(
+        `INSERT INTO external_requests 
+        (session_id, aon_id, redirect_url, results_webhook, user_metadata)
+        VALUES (?, ?, ?, ?, ?)`,
+        [
+          session_id,
+          aon_id,
+          redirect_url || null,
+          results_webhook || null,
+          JSON.stringify(user_metadata || {})
+        ]
+      );
     } catch (e) {
-      // don't fail whole flow if logging the incoming request fails
-      console.warn('Could not insert into external_requests:', e.message);
+      console.warn('external_requests insert failed:', e.message);
     }
 
-    // pick a random active test
-    const [tests] = await con.promise().query("SELECT id, test_name FROM tests WHERE status = 'Active' ORDER BY RAND() LIMIT 1");
-    if (!tests || tests.length === 0) {
-      return res.status(404).json({ error: 'No active tests available' });
+    let connection;
+
+    try {
+      // 🔑 GET SINGLE CONNECTION
+      connection = await con.promise().getConnection();
+      await connection.beginTransaction();
+
+      // 1️⃣ pick random active test
+      const [tests] = await connection.query(
+        `SELECT id, test_name
+        FROM tests
+        WHERE status = 'Active'
+        ORDER BY RAND()
+        LIMIT 1`
+      );
+
+      if (!tests.length) {
+        throw new Error('No active tests available');
+      }
+
+      const test = tests[0];
+
+      // 2️⃣ pick & lock random free slot
+      const [slots] = await connection.query(
+        `SELECT id, question_id, docker_port, frontend_port
+        FROM candidate_port_slots
+        WHERE is_utilized = 0
+        ORDER BY RAND()
+        LIMIT 1
+        FOR UPDATE`
+      );
+
+      if (!slots.length) {
+        throw new Error('No free slots available');
+      }
+
+      const slot = slots[0];
+
+      const launchToken = generateOpaqueToken();
+
+      // 3️⃣ insert launch token
+      await connection.query(
+        `INSERT INTO launch_tokens
+        (token, session_id, aon_id, test_id, slot_id, expires_at)
+        VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 3 HOUR))`,
+        [launchToken, session_id, aon_id, test.id, slot.id]
+      );
+
+      // 4️⃣ mark slot as utilized
+      await connection.query(
+        `UPDATE candidate_port_slots
+        SET is_utilized = 1
+        WHERE id = ?`,
+        [slot.id]
+      );
+
+      // 5️⃣ commit transaction
+      await connection.commit();
+
+      const test_link = `https://assessment.kggeniuslabs.com/platforma/start?t=${launchToken}`;
+
+      // non-transactional insert (safe after commit)
+      await con.promise().query(
+        `INSERT INTO test_assignment_users
+        (test_id, aon_id, status, session_id, test_link)
+        VALUES (?, ?, ?, ?, ?)`,
+        [test.id, aon_id, 'Assigned', session_id, test_link]
+      );
+
+      return res.json({
+        aon_id,
+        session_id,
+        test_id: test.id,
+        test_name: test.test_name,
+        test_link
+      });
+
+    } catch (err) {
+      if (connection) await connection.rollback();
+      console.error('External assign error:', err);
+      return res.status(500).json({
+        error: 'Failed to assign test',
+        details: err.message
+      });
+    } finally {
+      if (connection) connection.release();
     }
-    const test = tests[0];
-
-    // build test link - prefer redirect_url if provided, otherwise build from env
-    const base = "https://assessment.kggeniuslabs.com/aon/"
-    const separator = base.includes('?') ? '&' : '?';
-    const test_link = `${base}${separator}test_id=${test.id}&session_id=${encodeURIComponent(session_id)}&aon_id=${encodeURIComponent(aon_id)}`;
-
-    // insert into test_assignment_users (store session_id and test_link)
-    const insertAssignSql = 'INSERT INTO test_assignment_users (test_id, aon_id, status, session_id, test_link) VALUES (?, ?, ?, ?, ?)';
-    await con.promise().query(insertAssignSql, [test.id, aon_id, 'Assigned', session_id, test_link]);
-
-    return res.json({ aon_id, session_id, test_id: test.id, test_name: test.test_name, test_link });
-  } catch (err) {
-    console.error('External assign error:', err);
-    return res.status(500).json({ error: 'Failed to assign test', details: err.message });
-  }
 });
+
+app.get("/v2/aon/resolve", async (req, res) => {
+    const { t } = req.query;
+
+    if (!t) {
+      return res.status(400).json({ success: false, error: "Missing token" });
+    }
+
+    const [rows] = await con.promise().query(
+      `
+      SELECT
+        lt.id,
+        lt.session_id,
+        lt.aon_id,
+        lt.test_id,
+        t.test_name,
+
+        cps.question_id,
+        cps.docker_port,
+        cps.frontend_port AS output_port
+
+      FROM launch_tokens lt
+      INNER JOIN tests t
+        ON t.id = lt.test_id
+      INNER JOIN candidate_port_slots cps
+        ON cps.id = lt.slot_id
+
+      WHERE lt.token = ?
+        AND lt.expires_at > NOW()
+      `,
+      [t]
+    );
+
+    if (!rows.length) {
+      return res.json({ success: false });
+    }
+
+    // // optional: one-time-use token (recommended)
+    // await con.promise().query(
+    //   `DELETE FROM launch_tokens WHERE token = ?`,
+    //   [t]
+    // );
+
+    return res.json({
+      success: true,
+      payload: rows[0]
+    });
+  });
 
 app.listen(process.env.PORT || 5000, () => { 
     console.log(`the port is running in ${process.env.PORT || 5000}`)
