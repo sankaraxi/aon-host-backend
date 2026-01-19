@@ -435,6 +435,49 @@ const upload = multer({ storage });
           })
       })
 
+      const webhookPayload = {
+      userId,
+      result_data: results,
+      overall_result: overallResult,
+      timestamp: new Date().toISOString()
+    };
+
+    // Look up results_webhook for this AON/user id
+    let resultsWebhookUrl = null;
+    try {
+      const [rows] = await con.promise().query(
+        'SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1',
+        [userId]
+      );
+      if (rows.length && rows[0].results_webhook) {
+        resultsWebhookUrl = rows[0].results_webhook;
+      }
+    } catch (e) {
+      console.error('Failed to fetch results_webhook for aon_id/userId', userId, e.message);
+    }
+
+    if (resultsWebhookUrl) {
+      // Fire-and-forget webhook
+      axios.post(
+        resultsWebhookUrl,
+        webhookPayload,
+        {
+          headers: {
+            "Content-Type": "application/json"
+          },
+          timeout: 5000
+        }
+      )
+      .then(() => {
+        console.log("Webhook delivered successfully");
+      })
+      .catch(err => {
+        console.error("Webhook failed:", err.message);
+      });
+    } else {
+      console.log('No results_webhook URL configured for aon_id/userId', userId, '- skipping webhook call');
+    }
+
       
 
     } catch (error) {
@@ -500,6 +543,7 @@ const upload = multer({ storage });
         }
       })
 
+
       var updateQuery = 'UPDATE cocube_user SET log_status = 3 WHERE id = ?';
             con.query(updateQuery,[userId],(error,result)=>{
               if(error){
@@ -513,6 +557,49 @@ const upload = multer({ storage });
               }
           })
       })
+
+      const webhookPayload = {
+      userId,
+      result_data: results,
+      overall_result: overallResult,
+      timestamp: new Date().toISOString()
+    };
+
+    // Look up results_webhook for this AON/user id
+    let resultsWebhookUrl = null;
+    try {
+      const [rows] = await con.promise().query(
+        'SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1',
+        [userId]
+      );
+      if (rows.length && rows[0].results_webhook) {
+        resultsWebhookUrl = rows[0].results_webhook;
+      }
+    } catch (e) {
+      console.error('Failed to fetch results_webhook for aon_id/userId', userId, e.message);
+    }
+
+    if (resultsWebhookUrl) {
+      // Fire-and-forget webhook
+      axios.post(
+        resultsWebhookUrl,
+        webhookPayload,
+        {
+          headers: {
+            "Content-Type": "application/json"
+          },
+          timeout: 5000
+        }
+      )
+      .then(() => {
+        console.log("Webhook delivered successfully");
+      })
+      .catch(err => {
+        console.error("Webhook failed:", err.message);
+      });
+    } else {
+      console.log('No results_webhook URL configured for aon_id/userId', userId, '- skipping webhook call');
+    }
 
       
 
@@ -590,6 +677,49 @@ const upload = multer({ storage });
               }
           })
       })
+
+      const webhookPayload = {
+      userId,
+      result_data: results,
+      overall_result: overallResult,
+      timestamp: new Date().toISOString()
+    };
+
+    // Look up results_webhook for this AON/user id
+    let resultsWebhookUrl = null;
+    try {
+      const [rows] = await con.promise().query(
+        'SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1',
+        [userId]
+      );
+      if (rows.length && rows[0].results_webhook) {
+        resultsWebhookUrl = rows[0].results_webhook;
+      }
+    } catch (e) {
+      console.error('Failed to fetch results_webhook for aon_id/userId', userId, e.message);
+    }
+
+    if (resultsWebhookUrl) {
+      // Fire-and-forget webhook
+      axios.post(
+        resultsWebhookUrl,
+        webhookPayload,
+        {
+          headers: {
+            "Content-Type": "application/json"
+          },
+          timeout: 5000
+        }
+      )
+      .then(() => {
+        console.log("Webhook delivered successfully");
+      })
+      .catch(err => {
+        console.error("Webhook failed:", err.message);
+      });
+    } else {
+      console.log('No results_webhook URL configured for aon_id/userId', userId, '- skipping webhook call');
+    }
 
       
 
