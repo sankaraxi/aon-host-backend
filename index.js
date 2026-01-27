@@ -1198,7 +1198,7 @@ app.post("/v2/assign-users", uploaduser.single("file"), (req, res) => {
 // External API: accept payload from other server and assign a random test
 app.post('/v2/external/assign',basicAuth, async (req, res) => {
   const payload = req.body || {};
-    const { session_id, aon_id, redirect_url, results_webhook, user_metadata } = payload;
+    const { session_id, aon_id, redirect_url, results_webhook, user_metadata, client_id } = payload;
 
     if (!session_id || !aon_id) {
       return res.status(400).json({ error: 'Missing required fields: session_id or aon_id' });
@@ -1244,18 +1244,55 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
 
       const test = tests[0];
 
-      // 2️⃣ pick & lock random free slot
-      const [slots] = await connection.query(
-        `SELECT id, question_id, docker_port, frontend_port
-        FROM candidate_port_slots
-        WHERE is_utilized = 0
-        ORDER BY RAND()
-        LIMIT 1
-        FOR UPDATE`
-      );
+     // 2️⃣ Build slot query based on whether client_id is provided
+      let slotQuery;
+      let slotParams = [];
+
+      if (client_id) {
+        // If client_id is provided, get slots assigned to this client
+        // First, verify the client exists
+        const [clientCheck] = await connection.query(
+          `SELECT client_id, client_name FROM clients WHERE client_id = ? OR client_code = ?`,
+          [client_id, client_id]
+        );
+
+        if (!clientCheck.length) {
+          throw new Error(`Client not found: ${client_id}`);
+        }
+
+        const resolvedClientId = clientCheck[0].client_id;
+        console.log(`Using client: ${clientCheck[0].client_name} (ID: ${resolvedClientId})`);
+
+        // Get slots assigned to this client that are not utilized
+        slotQuery = `
+          SELECT cps.id, cps.question_id, cps.docker_port, cps.frontend_port
+          FROM candidate_port_slots cps
+          INNER JOIN client_assignments ca ON ca.slot_id = cps.id AND ca.is_active = 1
+          WHERE cps.is_utilized = 0 AND ca.client_id = ?
+          ORDER BY RAND()
+          LIMIT 1
+          FOR UPDATE
+        `;
+        slotParams = [resolvedClientId];
+      } else {
+        // No client_id provided - use any available slot (backward compatibility)
+        slotQuery = `
+          SELECT id, question_id, docker_port, frontend_port
+          FROM candidate_port_slots
+          WHERE is_utilized = 0
+          ORDER BY RAND()
+          LIMIT 1
+          FOR UPDATE
+        `;
+      }
+
+      const [slots] = await connection.query(slotQuery, slotParams);
 
       if (!slots.length) {
-        throw new Error('No free slots available');
+        const errorMsg = client_id 
+          ? `No free slots available for client: ${client_id}. Please ensure slots are assigned to this client.`
+          : 'No free slots available';
+        throw new Error(errorMsg);
       }
 
       const slot = slots[0];
@@ -1296,7 +1333,9 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
         session_id,
         test_id: test.id,
         test_name: test.test_name,
-        test_link
+        test_link,
+        test_link,
+        client_id: client_id || null
       });
 
     } catch (err) {
@@ -1357,6 +1396,165 @@ app.get("/v2/aon/resolve", async (req, res) => {
       success: true,
       payload: rows[0]
     });
+  });
+
+
+
+   // ========== CLIENT MANAGEMENT API ENDPOINTS ==========
+
+  // Get all clients
+  app.get('/api/clients', async (req, res) => {
+    try {
+      const [clients] = await con.promise().query(
+        'SELECT * FROM clients ORDER BY client_name'
+      );
+      res.json(clients);
+    } catch (err) {
+      console.error('Error fetching clients:', err);
+      res.status(500).json({ error: 'Failed to fetch clients' });
+    }
+  });
+
+  // Add a new client
+  app.post('/api/clients', async (req, res) => {
+    const { client_name, client_code, description } = req.body;
+
+    if (!client_name || !client_code) {
+      return res.status(400).json({ error: 'client_name and client_code are required' });
+    }
+
+    try {
+      const [existing] = await con.promise().query(
+        'SELECT client_id FROM clients WHERE client_code = ?',
+        [client_code]
+      );
+
+      if (existing.length > 0) {
+        return res.status(409).json({ error: 'Client code already exists' });
+      }
+
+      const [result] = await con.promise().query(
+        'INSERT INTO clients (client_name, client_code, description) VALUES (?, ?, ?)',
+        [client_name, client_code, description || null]
+      );
+
+      res.status(201).json({
+        message: 'Client created successfully',
+        client_id: result.insertId
+      });
+    } catch (err) {
+      console.error('Error creating client:', err);
+      res.status(500).json({ error: 'Failed to create client' });
+    }
+  });
+
+  // Delete a client
+  app.delete('/api/clients/:id', async (req, res) => {
+    const clientId = req.params.id;
+
+    try {
+      // First, delete all assignments for this client
+      await con.promise().query(
+        'DELETE FROM client_assignments WHERE client_id = ?',
+        [clientId]
+      );
+
+      // Then delete the client
+      const [result] = await con.promise().query(
+        'DELETE FROM clients WHERE client_id = ?',
+        [clientId]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: 'Client not found' });
+      }
+
+      res.json({ message: 'Client deleted successfully' });
+    } catch (err) {
+      console.error('Error deleting client:', err);
+      res.status(500).json({ error: 'Failed to delete client' });
+    }
+  });
+
+  // Get all slots
+  app.get('/api/slots', async (req, res) => {
+    try {
+      const [slots] = await con.promise().query(
+        'SELECT * FROM candidate_port_slots ORDER BY id'
+      );
+      res.json(slots);
+    } catch (err) {
+      console.error('Error fetching slots:', err);
+      res.status(500).json({ error: 'Failed to fetch slots' });
+    }
+  });
+
+  // Get all client assignments
+  app.get('/api/client-assignments', async (req, res) => {
+    try {
+      const [assignments] = await con.promise().query(
+        `SELECT ca.*, c.client_name, cps.question_id, cps.docker_port, cps.frontend_port
+         FROM client_assignments ca
+         INNER JOIN clients c ON c.client_id = ca.client_id
+         INNER JOIN candidate_port_slots cps ON cps.id = ca.slot_id
+         WHERE ca.is_active = 1`
+      );
+      res.json(assignments);
+    } catch (err) {
+      console.error('Error fetching client assignments:', err);
+      res.status(500).json({ error: 'Failed to fetch client assignments' });
+    }
+  });
+
+  // Assign slots to a client
+  app.post('/api/client-assignments', async (req, res) => {
+    const { client_id, slot_ids } = req.body;
+
+    if (!client_id || !Array.isArray(slot_ids)) {
+      return res.status(400).json({ error: 'client_id and slot_ids array are required' });
+    }
+
+    let connection;
+    try {
+      connection = await con.promise().getConnection();
+      await connection.beginTransaction();
+
+      // First, remove all existing assignments for this client
+      await connection.query(
+        'DELETE FROM client_assignments WHERE client_id = ?',
+        [client_id]
+      );
+
+      // Then insert new assignments
+      if (slot_ids.length > 0) {
+        const values = slot_ids.map(slotId => [client_id, slotId]);
+        await connection.query(
+          'INSERT INTO client_assignments (client_id, slot_id) VALUES ?',
+          [values]
+        );
+      }
+
+      await connection.commit();
+      res.json({ message: 'Slots assigned successfully', assigned_count: slot_ids.length });
+    } catch (err) {
+      if (connection) await connection.rollback();
+      console.error('Error assigning slots:', err);
+      res.status(500).json({ error: 'Failed to assign slots' });
+    } finally {
+      if (connection) connection.release();
+    }
+  });
+
+   app.post('/api/slots/reset', async (req, res) => {
+    try {
+      await con.promise().query(
+        'UPDATE candidate_port_slots SET is_utilized = 0'
+      );
+      res.json({ message: 'All slot utilizations reset to 0' });
+    } catch (err) {
+      console.error('Error resetting slots:', err);
+      res.status(500).json({ error: 'Failed to reset slots' });
+    }
   });
 
 app.listen(process.env.PORT || 5000, () => { 
