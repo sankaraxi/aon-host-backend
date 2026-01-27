@@ -1403,7 +1403,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
    // ========== CLIENT MANAGEMENT API ENDPOINTS ==========
 
   // Get all clients
-  app.get('/v2/api/clients', async (req, res) => {
+  app.get('/v2/clients', async (req, res) => {
     try {
       const [clients] = await con.promise().query(
         'SELECT * FROM clients ORDER BY client_name'
@@ -1416,7 +1416,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
   });
 
   // Add a new client
-  app.post('/v2/api/clients', async (req, res) => {
+  app.post('/v2/clients', async (req, res) => {
     const { client_name, client_code, description } = req.body;
 
     if (!client_name || !client_code) {
@@ -1449,7 +1449,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
   });
 
   // Delete a client
-  app.delete('/v2/api/clients/:id', async (req, res) => {
+  app.delete('/v2/clients/:id', async (req, res) => {
     const clientId = req.params.id;
 
     try {
@@ -1477,7 +1477,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
   });
 
   // Get all slots
-  app.get('/v2/api/slots', async (req, res) => {
+  app.get('/v2/slots', async (req, res) => {
     try {
       const [slots] = await con.promise().query(
         'SELECT * FROM candidate_port_slots ORDER BY id'
@@ -1490,7 +1490,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
   });
 
   // Get all client assignments
-  app.get('/v2/api/client-assignments', async (req, res) => {
+  app.get('/v2/client-assignments', async (req, res) => {
     try {
       const [assignments] = await con.promise().query(
         `SELECT ca.*, c.client_name, cps.question_id, cps.docker_port, cps.frontend_port
@@ -1507,7 +1507,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
   });
 
   // Assign slots to a client
-  app.post('/v2/api/client-assignments', async (req, res) => {
+  app.post('/v2/client-assignments', async (req, res) => {
     const { client_id, slot_ids } = req.body;
 
     if (!client_id || !Array.isArray(slot_ids)) {
@@ -1545,7 +1545,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
     }
   });
 
-   app.post('/v2/api/slots/reset', async (req, res) => {
+   app.post('/v2/slots/reset', async (req, res) => {
     try {
       await con.promise().query(
         'UPDATE candidate_port_slots SET is_utilized = 0'
