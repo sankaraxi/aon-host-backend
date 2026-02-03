@@ -761,10 +761,10 @@ const upload = multer({ storage });
     const command = `bash "${shScriptPath}" "${userId}" "${empNo}" "${dockerPort}" "${outputPort}"`;
   
     exec(command, (error, stdout, stderr) => {
-      // if (error) {
-      //   console.error(`❌ Shell Execution Error: ${error.message}`);
-      //   return res.status(500).json({ status: "error", message: "Script execution failed", error: error.message });
-      // }
+      if (error) {
+        console.error(`❌ Shell Execution Error: ${error.message}`);
+        return res.status(500).json({ status: "error", message: "Script execution failed", error: error.message });
+      }
   
       if (stderr) {
         console.warn(`⚠️ Shell Stderr: ${stderr}`);
