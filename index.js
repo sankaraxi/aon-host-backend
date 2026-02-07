@@ -1318,7 +1318,7 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
       // 5️⃣ commit transaction
       await connection.commit();
 
-      const test_link = `https://assessment.kggeniuslabs.com/aon/start?t=${launchToken}`;
+      const test_link = `https://awstesting.kggeniuslabs.com/aon/start?t=${launchToken}`;
 
       // non-transactional insert (safe after commit)
       await con.promise().query(
