@@ -1,48 +1,76 @@
 function calculateOverallScores(data) {
+    // Handle null/undefined data
+    if (!data || !data.EvaluationDetails || !Array.isArray(data.EvaluationDetails)) {
+      return {
+        AvgLoadTime: data?.AvgLoadTime || 0,
+        OverallCodeStructureScore: 0,
+        OverallCSSScore: 0,
+        OverallJavascriptScore: 0,
+        TotalScore: 0
+      };
+    }
+
     const evaluationDetails = data.EvaluationDetails;
   
-  // Group the scores by category
-  const scoresByCategory = {
-    'Code Structure & Cleanliness': [],
-    'CSS Expertise': [],
-    'Java Script': []
-  };
+    // Group the scores by category (using actual category names from assessment files)
+    const scoresByCategory = {
+      CodeStructure: [],  // 'Code Structure & Cleanliness'
+      CSS: [],            // 'CSS Expertise' and 'CSS Styling, Animations & Effects'
+      JavaScript: []      // 'Java Script' (with or without trailing space)
+    };
+
+    // Collect scores for each category based on actual category names
+    evaluationDetails.forEach(item => {
+      const score = typeof item.score === 'number' ? item.score : 0;
+      const category = (item.category || '').trim();
+      
+      if (category === 'Code Structure & Cleanliness') {
+        scoresByCategory.CodeStructure.push({ score, maxScore: 20 }); // Perf & Responsiveness are 20 each
+      } else if (category === 'CSS Expertise' || category === 'CSS Styling, Animations & Effects') {
+        scoresByCategory.CSS.push({ score, maxScore: 5 }); // CSS tests are 5 each
+      } else if (category === 'Java Script' || category.trim() === 'Java Script') {
+        scoresByCategory.JavaScript.push({ score, maxScore: 5 }); // JS tests are 5 each
+      }
+    });
   
-  // Collect scores for each category
-  evaluationDetails.forEach(item => {
-    if (scoresByCategory[item.category] !== undefined) {
-      scoresByCategory[item.category].push(item.score);
-    }
-  });
+  // Calculate the sum of actual scores and max possible scores for each category
+  const codeStructureSum = scoresByCategory.CodeStructure.reduce((sum, item) => sum + item.score, 0);
+  const codeStructureMax = scoresByCategory.CodeStructure.reduce((sum, item) => sum + item.maxScore, 0) || 1;
   
-  // Calculate the sum of scores for each category
-  const essentialSum = scoresByCategory['Code Structure & Cleanliness'].reduce((sum, score) => sum + score, 0);
-  const efficiencySum = scoresByCategory['CSS Expertise'].reduce((sum, score) => sum + score, 0);
-  const requiredSum = scoresByCategory['Java Script'].reduce((sum, score) => sum + score, 0);
+  const cssSum = scoresByCategory.CSS.reduce((sum, item) => sum + item.score, 0);
+  const cssMax = scoresByCategory.CSS.reduce((sum, item) => sum + item.maxScore, 0) || 1;
+  
+  const javascriptSum = scoresByCategory.JavaScript.reduce((sum, item) => sum + item.score, 0);
+  const javascriptMax = scoresByCategory.JavaScript.reduce((sum, item) => sum + item.maxScore, 0) || 1;
   
   // Calculate the overall scores according to the specified weights
-  // Essential: Convert to 40%
-  const maxEssentialPoints = scoresByCategory['Code Structure & Cleanliness'].length * 5; // Each test case holds 5 points
-  const overallEssentialScore = (essentialSum / maxEssentialPoints) * 40;
+  // Code Structure & Cleanliness: 30%
+  const codeStructurePercentage = codeStructureSum / codeStructureMax;
+  const overallCodeStructureScore = codeStructurePercentage * 30;
   
-  // Efficiency: Convert to 40%
-  const maxEfficiencyPoints = scoresByCategory['CSS Expertise'].length * 5; // Each test case holds 5 points
-  const overallEfficiencyScore = (efficiencySum / maxEfficiencyPoints) * 40;
+  // CSS Expertise: 40%
+  const cssPercentage = cssSum / cssMax;
+  const overallCSSScore = cssPercentage * 40;
   
-  // Required: Convert to 20%
-  const maxRequiredPoints = scoresByCategory['Java Script'].length * 5; // Each test case holds 5 points
-  const overallRequiredScore = (requiredSum / maxRequiredPoints) * 20;
+  // JavaScript: 30%
+  const javascriptPercentage = javascriptSum / javascriptMax;
+  const overallJavaScriptScore = javascriptPercentage * 30;
   
-  // Calculate the total score
-  const totalScore = overallEssentialScore + overallEfficiencyScore + overallRequiredScore;
+  // Calculate the total score out of 100
+  const totalScore = overallCodeStructureScore + overallCSSScore + overallJavaScriptScore;
   
-  // Round all scores to 2 decimal places for readability
+  // Round all scores to 2 decimal places, return 0 for any NaN/null values
+  const safeScore = (score) => {
+    const parsed = parseFloat(score.toFixed(2));
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
   return {
-    AvgLoadTime: data.AvgLoadTime,
-    OverallCodeStructureScore: parseFloat(overallEssentialScore.toFixed(2)),
-    OverallCSSScore: parseFloat(overallEfficiencyScore.toFixed(2)),
-    OverallJavascriptScore: parseFloat(overallRequiredScore.toFixed(2)),
-    TotalScore: parseFloat(totalScore.toFixed(2))
+    AvgLoadTime: data.AvgLoadTime || 0,
+    OverallCodeStructureScore: safeScore(overallCodeStructureScore),
+    OverallCSSScore: safeScore(overallCSSScore),
+    OverallJavascriptScore: safeScore(overallJavaScriptScore),
+    TotalScore: safeScore(totalScore)
   };
   }
   

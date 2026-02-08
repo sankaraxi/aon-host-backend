@@ -435,49 +435,7 @@ const upload = multer({ storage });
           })
       })
 
-      const webhookPayload = {
-      userId,
-      result_data: results,
-      overall_result: overallResult,
-      timestamp: new Date().toISOString()
-    };
-
-    // Look up results_webhook for this AON/user id
-    let resultsWebhookUrl = null;
-    try {
-      const [rows] = await con.promise().query(
-        'SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1',
-        [userId]
-      );
-      if (rows.length && rows[0].results_webhook) {
-        resultsWebhookUrl = rows[0].results_webhook;
-      }
-    } catch (e) {
-      console.error('Failed to fetch results_webhook for aon_id/userId', userId, e.message);
-    }
-
-    if (resultsWebhookUrl) {
-      // Fire-and-forget webhook
-      axios.post(
-        resultsWebhookUrl,
-        webhookPayload,
-        {
-          headers: {
-            "Content-Type": "application/json"
-          },
-          timeout: 5000
-        }
-      )
-      .then(() => {
-        console.log("Webhook delivered successfully");
-      })
-      .catch(err => {
-        console.error("Webhook failed:", err.message);
-      });
-    } else {
-      console.log('No results_webhook URL configured for aon_id/userId', userId, '- skipping webhook call');
-    }
-
+    
       
 
     } catch (error) {
@@ -557,50 +515,6 @@ const upload = multer({ storage });
               }
           })
       })
-
-      const webhookPayload = {
-      userId,
-      result_data: results,
-      overall_result: overallResult,
-      timestamp: new Date().toISOString()
-    };
-
-    // Look up results_webhook for this AON/user id
-    let resultsWebhookUrl = null;
-    try {
-      const [rows] = await con.promise().query(
-        'SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1',
-        [userId]
-      );
-      if (rows.length && rows[0].results_webhook) {
-        resultsWebhookUrl = rows[0].results_webhook;
-      }
-    } catch (e) {
-      console.error('Failed to fetch results_webhook for aon_id/userId', userId, e.message);
-    }
-
-    if (resultsWebhookUrl) {
-      // Fire-and-forget webhook
-      axios.post(
-        resultsWebhookUrl,
-        webhookPayload,
-        {
-          headers: {
-            "Content-Type": "application/json"
-          },
-          timeout: 5000
-        }
-      )
-      .then(() => {
-        console.log("Webhook delivered successfully");
-      })
-      .catch(err => {
-        console.error("Webhook failed:", err.message);
-      });
-    } else {
-      console.log('No results_webhook URL configured for aon_id/userId', userId, '- skipping webhook call');
-    }
-
       
 
     } catch (error) {
@@ -677,50 +591,6 @@ const upload = multer({ storage });
               }
           })
       })
-
-      const webhookPayload = {
-      userId,
-      result_data: results,
-      overall_result: overallResult,
-      timestamp: new Date().toISOString()
-    };
-
-    // Look up results_webhook for this AON/user id
-    let resultsWebhookUrl = null;
-    try {
-      const [rows] = await con.promise().query(
-        'SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1',
-        [userId]
-      );
-      if (rows.length && rows[0].results_webhook) {
-        resultsWebhookUrl = rows[0].results_webhook;
-      }
-    } catch (e) {
-      console.error('Failed to fetch results_webhook for aon_id/userId', userId, e.message);
-    }
-
-    if (resultsWebhookUrl) {
-      // Fire-and-forget webhook
-      axios.post(
-        resultsWebhookUrl,
-        webhookPayload,
-        {
-          headers: {
-            "Content-Type": "application/json"
-          },
-          timeout: 5000
-        }
-      )
-      .then(() => {
-        console.log("Webhook delivered successfully");
-      })
-      .catch(err => {
-        console.error("Webhook failed:", err.message);
-      });
-    } else {
-      console.log('No results_webhook URL configured for aon_id/userId', userId, '- skipping webhook call');
-    }
-
       
 
     } catch (error) {
@@ -1204,6 +1074,34 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: session_id or aon_id' });
     }
 
+    // CHECK: If aon_id already has an active (non-expired) launch token, reject
+    try {
+      const [existingTokens] = await con.promise().query(
+        `SELECT lt.token, lt.expires_at,
+                (SELECT tau.test_link FROM test_assignment_users tau 
+                 WHERE tau.aon_id COLLATE utf8mb4_general_ci = lt.aon_id COLLATE utf8mb4_general_ci
+                 AND tau.session_id COLLATE utf8mb4_general_ci = lt.session_id COLLATE utf8mb4_general_ci
+                 LIMIT 1) AS test_link
+         FROM launch_tokens lt
+         WHERE lt.aon_id COLLATE utf8mb4_general_ci = ? COLLATE utf8mb4_general_ci 
+         AND lt.expires_at > NOW()
+         ORDER BY lt.id DESC LIMIT 1`,
+        [aon_id]
+      );
+
+      if (existingTokens.length > 0) {
+        // Test link already assigned for this aon_id
+        return res.status(409).json({ 
+          error: 'Test link already assigned for this aon_id',
+          message: 'A test link has already been generated for this candidate. Each aon_id can only have one active test link.',
+          existing_link: existingTokens[0].test_link || null
+        });
+      }
+    } catch (e) {
+      console.warn('Check for existing token failed:', e.message);
+      // Continue with assignment if check fails (fail-open behavior)
+    }
+
     // log request (non-blocking)
     try {
       await con.promise().query(
@@ -1364,6 +1262,11 @@ app.get("/v2/aon/resolve", async (req, res) => {
         lt.session_id,
         lt.aon_id,
         lt.test_id,
+        lt.log_status,
+        lt.closing_time_ms,
+        lt.assessment_started,
+        lt.workspace_url,
+        lt.framework,
         t.test_name,
 
         cps.question_id,
@@ -1396,6 +1299,151 @@ app.get("/v2/aon/resolve", async (req, res) => {
       success: true,
       payload: rows[0]
     });
+  });
+
+
+    // Track when user starts the workspace/assessment
+  app.post("/v2/aon/start-workspace", async (req, res) => {
+    const { launchTokenId, workspaceUrl, framework } = req.body;
+
+    if (!launchTokenId) {
+      return res.status(400).json({ success: false, error: "Missing launchTokenId" });
+    }
+
+    try {
+      await con.promise().query(
+        `UPDATE launch_tokens 
+         SET assessment_started = 1, 
+             workspace_url = ?, 
+             framework = ?,
+             log_status = 1
+         WHERE id = ?`,
+        [workspaceUrl || null, framework || null, launchTokenId]
+      );
+
+      return res.json({ success: true, message: "Workspace started tracking updated" });
+    } catch (err) {
+      console.error("Error updating workspace start:", err);
+      return res.status(500).json({ success: false, error: "Database update failed" });
+    }
+  });
+
+  // Pause timer and save remaining time for launch token
+  app.post('/api/aon/pause-timer/:launchTokenId/:timeLeft', (req, res) => {
+    const { launchTokenId, timeLeft } = req.params;
+    const newTimeleft = parseInt(timeLeft) * 1000;
+
+    console.log(`⏸️ Pausing timer for launch token ${launchTokenId} with ${newTimeleft} ms left`);
+
+    const updateQuery = `UPDATE launch_tokens SET log_status = 2, closing_time_ms = ? WHERE id = ?`;
+    con.query(updateQuery, [newTimeleft, launchTokenId], (err, result) => {
+      if (err) {
+        console.error("❌ DB update failed:", err);
+        return res.status(500).json({ error: 'Database update failed' });
+      }
+
+      console.log(`✅ Updated launch token ${launchTokenId} with closing_time_ms = ${newTimeleft}`);
+      return res.json({ message: 'Timer paused and saved', remainingMs: newTimeleft });
+    });
+  });
+
+  // Submit final assessment and send webhook
+  app.post('/v2/submit-final', async (req, res) => {
+    const { aonId, framework, outputPort, userQuestion } = req.body;
+    
+    if (!aonId || !framework || !userQuestion) {
+      return res.status(400).json({ error: 'Missing required fields: aonId, framework, userQuestion' });
+    }
+
+    console.log(`🎯 Final submission for aonId: ${aonId}, question: ${userQuestion}`);
+
+    try {
+      let results;
+      
+      // Run the appropriate assessment based on question
+      if (userQuestion === 'a1l1q3') {
+        const { a1l1q3 } = require('./A1L1RQ03.js');
+        results = await a1l1q3(aonId, framework, outputPort);
+      } else if (userQuestion === 'a1l1q2') {
+        const { a1l1q2 } = require('./A1L1RQ02.js');
+        results = await a1l1q2(aonId, framework, outputPort);
+      } else if (userQuestion === 'a1l1q1') {
+        const { a1l1q1 } = require('./A1L1RQ01.js');
+        results = await a1l1q1(aonId, framework, outputPort);
+      } else {
+        return res.status(400).json({ error: 'Invalid question type' });
+      }
+
+      const overallResult = calculateOverallScores(results);
+      const newOverallResult = JSON.stringify(overallResult);
+      const newresult = JSON.stringify(results);
+
+      // Insert results into database
+      const insertResults = "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)";
+      await con.promise().query(insertResults, [aonId, newresult, newOverallResult]);
+
+      // Log activity - assessment submitted
+      const insertLog = "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
+      await con.promise().query(insertLog, [aonId, 3]);
+
+      // Mark launch token as submitted
+      const updateLaunchToken = "UPDATE launch_tokens SET submitted = 1 WHERE aon_id = ?";
+      await con.promise().query(updateLaunchToken, [aonId]);
+
+      // Send webhook
+      const webhookPayload = {
+        userId: aonId,
+        result_data: results,
+        overall_result: overallResult,
+        timestamp: new Date().toISOString()
+      };
+
+      // Look up results_webhook for this AON id
+      let resultsWebhookUrl = null;
+      try {
+        const [rows] = await con.promise().query(
+          'SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1',
+          [aonId]
+        );
+        if (rows.length && rows[0].results_webhook) {
+          resultsWebhookUrl = rows[0].results_webhook;
+        }
+      } catch (e) {
+        console.error('Failed to fetch results_webhook for aonId', aonId, e.message);
+      }
+
+      if (resultsWebhookUrl) {
+        // Fire-and-forget webhook
+        axios.post(
+          resultsWebhookUrl,
+          webhookPayload,
+          {
+            headers: {
+              "Content-Type": "application/json"
+            },
+            timeout: 5000
+          }
+        )
+        .then(() => {
+          console.log("✅ Webhook delivered successfully for final submission");
+        })
+        .catch(err => {
+          console.error("❌ Webhook failed:", err.message);
+        });
+      } else {
+        console.log('No results_webhook URL configured for aonId', aonId, '- skipping webhook call');
+      }
+
+      return res.json({ 
+        success: true, 
+        message: 'Assessment submitted successfully',
+        detailedResults: results 
+      });
+
+    } catch (error) {
+      console.error('Final submission error:', error);
+      return res.status(500).json({ error: 'Failed to submit assessment', details: error.message });
+    }
   });
 
 
