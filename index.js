@@ -1094,7 +1094,7 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
         return res.status(409).json({ 
           error: 'Test link already assigned for this aon_id',
           message: 'A test link has already been generated for this candidate. Each aon_id can only have one active test link.',
-          existing_link: existingTokens[0].test_link || null
+          // existing_link: existingTokens[0].test_link || null
         });
       }
     } catch (e) {
