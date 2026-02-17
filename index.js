@@ -1383,8 +1383,8 @@ app.get("/v2/aon/resolve", async (req, res) => {
       await con.promise().query(insertResults, [aonId, newresult, newOverallResult]);
 
       // Log activity - assessment submitted
-      const insertLog = "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
-      await con.promise().query(insertLog, [aonId, 3]);
+      // const insertLog = "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
+      // await con.promise().query(insertLog, [aonId, 3]);
 
       // Mark launch token as submitted
       const updateLaunchToken = "UPDATE launch_tokens SET submitted = 1 WHERE aon_id = ?";
