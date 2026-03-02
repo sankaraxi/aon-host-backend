@@ -61,11 +61,7 @@ async function a1l1q1(id,framework,outputPort) {
     );
     
     const avgLoadTime = loadTimes.reduce((a, b) => a + b, 0) / loadTimes.length;
-    let score = 5;
-    if (avgLoadTime < 500) score = 20;
-    if (avgLoadTime < 1000) score = 18;
-    if (avgLoadTime < 1500) score = 15;
-    if (avgLoadTime < 2000) score = 10;
+    let score = 10;
     
     return {
       name: 'Concurrent Load Time',

@@ -1249,7 +1249,7 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
 });
 
 app.get("/v2/aon/resolve", async (req, res) => {
-    const { t } = req.query;
+   const { t } = req.query;
 
     if (!t) {
       return res.status(400).json({ success: false, error: "Missing token" });
@@ -1267,6 +1267,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
         lt.assessment_started,
         lt.workspace_url,
         lt.framework,
+        lt.submitted,
         t.test_name,
 
         cps.question_id,
@@ -1300,7 +1301,6 @@ app.get("/v2/aon/resolve", async (req, res) => {
       payload: rows[0]
     });
   });
-
 
     // Track when user starts the workspace/assessment
   app.post("/v2/aon/start-workspace", async (req, res) => {
@@ -1349,7 +1349,10 @@ app.get("/v2/aon/resolve", async (req, res) => {
 
   // Submit final assessment and send webhook
   app.post('/v2/submit-final', async (req, res) => {
+    console.log('🚀 Received final submission');
     const { aonId, framework, outputPort, userQuestion } = req.body;
+
+    // console.log(`🚀 Final submission received for aonId: ${aonId}, question: ${userQuestion}`);
     
     if (!aonId || !framework || !userQuestion) {
       return res.status(400).json({ error: 'Missing required fields: aonId, framework, userQuestion' });
@@ -1390,6 +1393,22 @@ app.get("/v2/aon/resolve", async (req, res) => {
       const updateLaunchToken = "UPDATE launch_tokens SET submitted = 1 WHERE aon_id = ?";
       await con.promise().query(updateLaunchToken, [aonId]);
 
+      // Look up redirect_url for this AON id
+      let redirectUrl = null;
+      try {
+        const [redirectRows] = await con.promise().query(
+          'SELECT redirect_url FROM external_requests WHERE aon_id = ? AND redirect_url IS NOT NULL ORDER BY id DESC LIMIT 1',
+          [aonId]
+        );
+        console.log('🔗 redirect_url lookup for aonId:', aonId, '→ rows:', redirectRows);
+        if (redirectRows.length && redirectRows[0].redirect_url) {
+          redirectUrl = redirectRows[0].redirect_url;
+        }
+      } catch (e) {
+        console.error('Failed to fetch redirect_url for aonId', aonId, e.message);
+      }
+      console.log('🔗 Final redirect_url:', redirectUrl);
+
       // Send webhook
       const webhookPayload = {
         userId: aonId,
@@ -1397,7 +1416,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
         overall_result: overallResult,
         timestamp: new Date().toISOString()
       };
-
+console.log('📡 Preparing to send webhook with payload:', webhookPayload);
       // Look up results_webhook for this AON id
       let resultsWebhookUrl = null;
       try {
@@ -1419,7 +1438,8 @@ app.get("/v2/aon/resolve", async (req, res) => {
           webhookPayload,
           {
             headers: {
-              "Content-Type": "application/json"
+              "Content-Type": "application/json",
+              'Authorization': 'Basic ' + Buffer.from(`${process.env.BASIC_AUTH_USER}:${process.env.BASIC_AUTH_PASS}`).toString('base64')
             },
             timeout: 5000
           }
@@ -1437,7 +1457,8 @@ app.get("/v2/aon/resolve", async (req, res) => {
       return res.json({ 
         success: true, 
         message: 'Assessment submitted successfully',
-        detailedResults: results 
+        detailedResults: results,
+        redirect_url: redirectUrl 
       });
 
     } catch (error) {
@@ -1445,8 +1466,6 @@ app.get("/v2/aon/resolve", async (req, res) => {
       return res.status(500).json({ error: 'Failed to submit assessment', details: error.message });
     }
   });
-
-
 
    // ========== CLIENT MANAGEMENT API ENDPOINTS ==========
 

@@ -25,7 +25,9 @@ function calculateOverallScores(data) {
       const category = (item.category || '').trim();
       
       if (category === 'Code Structure & Cleanliness') {
-        scoresByCategory.CodeStructure.push({ score, maxScore: 20 }); // Perf & Responsiveness are 20 each
+        const name = (item.name || '').trim();
+        const maxScore = name === 'Concurrent Load Time' ? 10 : 20; // Load Time is 10, Responsiveness is 20
+        scoresByCategory.CodeStructure.push({ score, maxScore });
       } else if (category === 'CSS Expertise' || category === 'CSS Styling, Animations & Effects') {
         scoresByCategory.CSS.push({ score, maxScore: 5 }); // CSS tests are 5 each
       } else if (category === 'Java Script' || category.trim() === 'Java Script') {
