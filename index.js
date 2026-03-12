@@ -1329,7 +1329,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
   });
 
   // Pause timer and save remaining time for launch token
-  app.post('/api/aon/pause-timer/:launchTokenId/:timeLeft', (req, res) => {
+  app.post('/v2/aon/pause-timer/:launchTokenId/:timeLeft', (req, res) => {
     const { launchTokenId, timeLeft } = req.params;
     const newTimeleft = parseInt(timeLeft) * 1000;
 
