@@ -153,67 +153,66 @@ const upload = multer({ storage });
   });
 
   app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
-      console.log("⏸️ Pause working");
-    
-      let sessionId;
-      let timeLeft;
-      let newTimeleft;
-      try {
-        // sessionId = typeof req.body === 'string'
-        //   ? JSON.parse(req.body).sessionId
-        //   : req.body.sessionId;
-        sessionId = req.params.sessionId;
-        timeLeft = req.params.timeLeft;
-        newTimeleft = timeLeft*1000;
-        console.log("timeleft",timeLeft)
-        console.log("newTimeleft",newTimeleft)
-        console.log("sessionId",sessionId)
-        console.log(`⏸️ Paused session ${sessionId} with ${newTimeleft} ms left`);
-    
-      const userId = req.params.userId;
-    
-      // Store remainingMs into DB
-      const updateQuery = `UPDATE cocube_user SET log_status=2, closing_time_ms = ? WHERE id = ?`;
-      con.query(updateQuery, [newTimeleft, userId], (err, result) => {
-        if (err) {
-          console.error("❌ DB update failed:", err);
-          return res.status(500).json({ error: 'Database update failed' });
-        }
-    
-        console.log(`✅ Updated user ${userId} with closing_time_ms = ${newTimeleft}`);
-        return res.json({ message: 'Paused and DB updated', remainingMs: newTimeleft });
-      });
-
-      var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-        con.query(insertcategory,[userId , 6],(error,result)=>{
-          if(error){
-              console.log(error)
-              // res.send({"status":"error"})
-
-          }
-          else{
-            console.log("inserted")
-            //  res.send({"status":"inserted"})
-          }
-        })
-      } catch {
-        return res.status(400).json({ error: 'Invalid pause data' });
-      }
-    
-      // const session = sessions[sessionId];
-      // if (!session || !session.startedAt) {
-      //   return res.json({ message: 'No active timer' });
-      // }
-      // let newTimeleft = timeLeft*1000;
-      // console.log("newTimeleft",newTimeleft)
-      // const elapsed = Date.now() - session.startedAt;
-      // session.remainingMs = Math.max(0, session.remainingMs - elapsed);
-      // session.startedAt = null;
-    
-      
-    });
+    console.log("⏸️ Pause working");
   
+    let sessionId;
+    let timeLeft;
+    let newTimeleft;
+    try {
+      // sessionId = typeof req.body === 'string'
+      //   ? JSON.parse(req.body).sessionId
+      //   : req.body.sessionId;
+      sessionId = req.params.sessionId;
+      timeLeft = req.params.timeLeft;
+      newTimeleft = timeLeft*1000;
+      console.log("timeleft",timeLeft)
+      console.log("newTimeleft",newTimeleft)
+      console.log("sessionId",sessionId)
+      console.log(`⏸️ Paused session ${sessionId} with ${newTimeleft} ms left`);
+  
+    const userId = req.params.userId;
+  
+    // Store remainingMs into DB
+    const updateQuery = `UPDATE cocube_user SET log_status=2, closing_time_ms = ? WHERE id = ?`;
+    con.query(updateQuery, [newTimeleft, userId], (err, result) => {
+      if (err) {
+        console.error("❌ DB update failed:", err);
+        return res.status(500).json({ error: 'Database update failed' });
+      }
+  
+      console.log(`✅ Updated user ${userId} with closing_time_ms = ${newTimeleft}`);
+      return res.json({ message: 'Paused and DB updated', remainingMs: newTimeleft });
+    });
 
+    var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
+      con.query(insertcategory,[userId , 6],(error,result)=>{
+        if(error){
+            console.log(error)
+            // res.send({"status":"error"})
+
+        }
+        else{
+          console.log("inserted")
+          //  res.send({"status":"inserted"})
+        }
+      })
+    } catch {
+      return res.status(400).json({ error: 'Invalid pause data' });
+    }
+  
+    // const session = sessions[sessionId];
+    // if (!session || !session.startedAt) {
+    //   return res.json({ message: 'No active timer' });
+    // }
+    // let newTimeleft = timeLeft*1000;
+    // console.log("newTimeleft",newTimeleft)
+    // const elapsed = Date.now() - session.startedAt;
+    // session.remainingMs = Math.max(0, session.remainingMs - elapsed);
+    // session.startedAt = null;
+  
+    
+  });
+  
   app.post('/v2/timer', (req, res) => {
     const { sessionId } = req.body;
     const session = sessions[sessionId];
@@ -435,9 +434,6 @@ const upload = multer({ storage });
           })
       })
 
-    
-      
-
     } catch (error) {
       console.error('Assessment error:', error);
 
@@ -621,56 +617,91 @@ const upload = multer({ storage });
     }
   });
 
-  app.post('/v2/run-script', (req, res) => {
+  app.post("/v2/run-script", (req, res) => {
+
     const { userId, empNo, userName, question, framework, dockerPort, outputPort } = req.body;
-  
-    // Construct shell script path
-    const shScriptPath = path.join(__dirname, `generate-docker-compose-${question}-${framework}.sh`);
-  
-    // Shell command with arguments (ensure script is executable with chmod +x)
-    const command = `bash "${shScriptPath}" "${userId}" "${empNo}" "${dockerPort}" "${outputPort}"`;
-  
+
+    // Detect OS
+    const isWindows = process.platform === "win32";
+    const extension = isWindows ? "ps1" : "sh";
+
+    // Script path
+    const scriptPath = path.join(
+      __dirname,
+      `generate-docker-compose-${question}-${framework}.${extension}`
+    );
+
+    // Build command
+    const command = isWindows
+      ? `powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}" -UserID ${userId} -EmployeeNo ${empNo} -dockerPort ${dockerPort} -outputPort ${outputPort}`
+      : `bash "${scriptPath}" "${userId}" "${empNo}" "${dockerPort}" "${outputPort}"`;
+
+    console.log("🚀 Executing:", command);
+
     exec(command, (error, stdout, stderr) => {
+
       if (error) {
-        console.error(`❌ Shell Execution Error: ${error.message}`);
-        return res.status(500).json({ status: "error", message: "Script execution failed", error: error.message });
+        console.error("❌ Script Execution Error:", error.message);
+        return res.status(500).json({
+          status: "error",
+          message: "Script execution failed",
+          error: error.message
+        });
       }
-  
+
       if (stderr) {
-        console.warn(`⚠️ Shell Stderr: ${stderr}`);
-        // Optionally include stderr in response
+        console.warn("⚠️ Script stderr:", stderr);
       }
-  
-      console.log(`✅ Script Output:\n${stdout}`);
-  
-      // Log activity to DB
-      const insertQuery = "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
-      con.query(insertQuery, [userId, 2], (dbError, result) => {
-        if (dbError) {
-          console.error("❌ DB Insert Error:", dbError);
-          return res.status(500).json({ status: "error", message: "Database insert failed", error: dbError.message });
+
+      console.log("✅ Script Output:\n", stdout);
+
+      // Insert log
+      const insertQuery =
+        "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
+
+      con.query(insertQuery, [userId, 2], (insertError) => {
+
+        if (insertError) {
+          console.error("🔴 DB Insert Error:", insertError);
+          return res.status(500).json({
+            status: "error",
+            message: "Activity log insert failed"
+          });
         }
-  
-        console.log("🟢 DB Insert Successful");
-        return res.status(200).json({ status: "success", output: stdout });
+
+        console.log("🟢 Activity log inserted");
+
+        // Update user timestamps
+        const updateQuery =
+          "UPDATE cocube_user SET last_login = ?, login_expiry = ? WHERE id = ?";
+
+        const issuedAt = new Date();
+        const expiresAt = new Date(Date.now() + 40 * 60 * 1000);
+
+        con.query(updateQuery, [issuedAt, expiresAt, userId], (updateError) => {
+
+          if (updateError) {
+            console.error("🔴 DB Update Error:", updateError);
+            return res.status(500).json({
+              status: "error",
+              message: "User update failed"
+            });
+          }
+
+          console.log("🟢 User timestamps updated");
+
+          return res.status(200).json({
+            status: "success",
+            output: stdout,
+            script: scriptPath
+          });
+
+        });
+
       });
 
-      const updateQuery = 'UPDATE cocube_user SET last_login = ?, login_expiry = ? WHERE id = ?';
-
-      const EXPIRES_IN = 40 * 60 * 1000; // 30 mins in ms
-      const issuedAt = new Date();
-      const expiresAt = new Date(Date.now() + EXPIRES_IN);
-
-      con.query(updateQuery, [issuedAt, expiresAt, userId], (updateError, updateResult) => {
-        if (updateError) {
-          console.error(`🔴 DB Error (Update): ${updateError}`);
-          return res.status(500).json({ status: "error", message: "User update failed" });
-        }
-      
-        console.log("🟢 User timestamps updated");
-        // You can send response here if this is the last step
-      });
     });
+
   });
 
   app.post('/v2/cleanup-docker', async (req, res) => {
@@ -1216,7 +1247,7 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
       // 5️⃣ commit transaction
       await connection.commit();
 
-      const test_link = `https://assessment.kggeniuslabs.com/aon/start?t=${launchToken}`;
+      const test_link = `${process.env.TEST_LINK}/aon/start?t=${launchToken}`;
 
       // non-transactional insert (safe after commit)
       await con.promise().query(
