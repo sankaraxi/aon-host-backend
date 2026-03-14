@@ -6,8 +6,8 @@ EMPLOYEE_NO=$2
 DOCKER_PORT=$3
 OUTPUT_PORT=$4
 
-if [ -z "$EmployeeNo" ]; then
-  echo "Usage: ./generate-docker-compose-a1l1.sh <EmployeeNo>"
+if [ -z "$EMPLOYEE_NO" ]; then
+  echo "Usage: ./generate-docker-compose-a1l1.sh <EMPLOYEE_NO>"
   exit 1
 fi
 
@@ -22,7 +22,7 @@ version: '3.8'
 
 services:
   code-server:
-    container_name: "code-server-a1l1q3-react-${EmployeeNo}"
+    container_name: "code-server-a1l1q3-react-${EMPLOYEE_NO}"
     image: "sankarkg/level-three-test:latest"
     ports:
       - "${DOCKER_PORT}:8080"
