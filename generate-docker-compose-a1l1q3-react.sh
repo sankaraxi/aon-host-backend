@@ -2,7 +2,7 @@
 
 # Accept UserID as an argument
 USER_ID=$1
-EMPLOYEE_NO=$2
+EMPLOYEE_NO=$(echo "$2" | tr '[:upper:]' '[:lower:]')
 DOCKER_PORT=$3
 OUTPUT_PORT=$4
 
