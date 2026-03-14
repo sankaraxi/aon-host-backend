@@ -633,7 +633,7 @@ const upload = multer({ storage });
 
     // Build command
     const command = isWindows
-      ? `powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}" -UserID ${userId} -EmployeeNo ${empNo} -dockerPort ${dockerPort} -outputPort ${outputPort}`
+      ? `powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}" -UserID ${userId} -EmployeeNo "${empNo}" -dockerPort ${dockerPort} -outputPort ${outputPort}`
       : `bash "${scriptPath}" "${userId}" "${empNo}" "${dockerPort}" "${outputPort}"`;
 
     console.log("🚀 Executing:", command);

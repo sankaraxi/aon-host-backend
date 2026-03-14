@@ -4,8 +4,8 @@ param (
     [string]$dockerPort,
     [string]$outputPort
 )
-if (-not $UserID) {
-    Write-Host "Usage: .\generate-docker-compose.ps1 -UserID <user_id>"
+if (-not $EmployeeNo) {
+    Write-Host "Usage: .\generate-docker-compose.ps1 -EmployeeNo <employee_no>"
     exit
 }
 
@@ -20,7 +20,7 @@ version: '3.8'
 
 services:
   code-server:
-    container_name: "code-server-a1l1q3-react-${UserID}"
+    container_name: "code-server-a1l1q3-react-${EmployeeNo}"
     image: "sankarkg/level-three-test:latest"
     # image: "sankarkg/demo-test-one:latest"
     ports:
@@ -65,15 +65,15 @@ volumes:
 
 
 # Debug: Print the calculated port
-Write-Host "Calculated Port for UserID ${UserID}: ${Port}"
+Write-Host "Calculated Port for Aon ID ${EmployeeNo}: ${Port}"
 
 # Debug: Print the Docker Compose file content
 Write-Host "Docker Compose Content:"
 Write-Host ${composeContent}
 
 # Save the content to a Docker Compose file
-$composeFileName = "docker-compose-a1l1q3-react-$UserID.yml"
+$composeFileName = "docker-compose-a1l1q3-react-$EmployeeNo.yml"
 $composeContent | Out-File -FilePath $composeFileName -Encoding utf8
 
 # Run Docker Compose to start the containers
-docker-compose -f $composeFileName -p a1l1q3-react-$UserID up -d
+docker-compose -f $composeFileName -p a1l1q3-react-$EmployeeNo up -d

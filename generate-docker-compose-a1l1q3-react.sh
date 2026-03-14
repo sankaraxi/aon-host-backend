@@ -6,8 +6,8 @@ EMPLOYEE_NO=$2
 DOCKER_PORT=$3
 OUTPUT_PORT=$4
 
-if [ -z "$USER_ID" ]; then
-  echo "Usage: ./generate-docker-compose-a1l1.sh <UserID>"
+if [ -z "$EmployeeNo" ]; then
+  echo "Usage: ./generate-docker-compose-a1l1.sh <EmployeeNo>"
   exit 1
 fi
 
@@ -22,7 +22,7 @@ version: '3.8'
 
 services:
   code-server:
-    container_name: "code-server-a1l1q3-react-${USER_ID}"
+    container_name: "code-server-a1l1q3-react-${EmployeeNo}"
     image: "sankarkg/level-three-test:latest"
     ports:
       - "${DOCKER_PORT}:8080"
@@ -48,17 +48,17 @@ EOF
 )
 
 # Debug: Print the calculated port
-echo "Calculated Port for UserID ${USER_ID}: ${PORT}"
+echo "Calculated Port for Aon ID ${EMPLOYEE_NO}: ${PORT}"
 
 # Debug: Print the Docker Compose file content
 echo "Docker Compose Content:"
 echo "$COMPOSE_CONTENT"
 
 # Save the content to a Docker Compose file
-COMPOSE_FILE_NAME="docker-compose-a1l1q3-react-${USER_ID}.yml"
+COMPOSE_FILE_NAME="docker-compose-a1l1q3-react-${EMPLOYEE_NO}.yml"
 echo "$COMPOSE_CONTENT" > "$COMPOSE_FILE_NAME"
 
 chmod +x "$COMPOSE_FILE_NAME"
 
 # Run Docker Compose to start the containers
-docker compose -f "$COMPOSE_FILE_NAME" -p a1l1q3-react-${USER_ID} up -d
+docker compose -f "$COMPOSE_FILE_NAME" -p a1l1q3-react-${EMPLOYEE_NO} up -d
