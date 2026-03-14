@@ -3,7 +3,7 @@
 # Accept arguments
 question=$1
 framework=$2
-userId=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+userId=$(echo "$3" | tr '[:upper:]' '[:lower:]')
 
 # Check for missing parameters
 if [ -z "$question" ] || [ -z "$framework" ] || [ -z "$userId" ]; then
