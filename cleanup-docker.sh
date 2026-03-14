@@ -28,14 +28,14 @@ else
   echo "⚠️  No container found with name: $containerName"
 fi
 
-# Remove the Docker image if it exists
-imageId=$(docker images -q "$imageName")
-if [ -n "$imageId" ]; then
-  docker rmi -f "$imageId" >/dev/null
-  echo "✅ Removed image: $imageName"
-else
-  echo "⚠️  No image found with name: $imageName"
-fi
+# # Remove the Docker image if it exists
+# imageId=$(docker images -q "$imageName")
+# if [ -n "$imageId" ]; then
+#   docker rmi -f "$imageId" >/dev/null
+#   echo "✅ Removed image: $imageName"
+# else
+#   echo "⚠️  No image found with name: $imageName"
+# fi
 
 # Optional cleanup for dangling stuff
 # docker volume prune -f

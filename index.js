@@ -4,7 +4,6 @@ const bodyparser = require('body-parser')
 const mysql=require('mysql2')
 require("dotenv").config();
 const path = require('path');
-const cron = require('node-cron'); // ✅ Cron import here
 const app = express()
 const jwt = require('jsonwebtoken');
 const fs = require("fs");
@@ -117,7 +116,181 @@ module.exports = con;
 
 // ---------- Timer Session Logic ----------
 const DURATION = 30 * 60 * 1000; // 30 mins
+const EXAM_DURATION_MS = DURATION;
+const DEADLINE_EPOCH_THRESHOLD_MS = 1000000000000;
 const sessions = {}; // sessionId => { startedAt, remainingMs }
+
+function isDeadlineStored(rawValue) {
+  if (rawValue === null || rawValue === undefined) return false;
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) && parsed > DEADLINE_EPOCH_THRESHOLD_MS;
+}
+
+function getRemainingMsFromStoredValue(rawValue) {
+  if (rawValue === null || rawValue === undefined) return EXAM_DURATION_MS;
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return EXAM_DURATION_MS;
+
+  if (isDeadlineStored(parsed)) {
+    return Math.max(0, parsed - Date.now());
+  }
+
+  return Math.max(0, parsed);
+}
+
+function getDeadlineFromStoredValue(rawValue) {
+  if (isDeadlineStored(rawValue)) {
+    return Number(rawValue);
+  }
+  const remainingMs = getRemainingMsFromStoredValue(rawValue);
+  return Date.now() + remainingMs;
+}
+
+async function insertUserLogSafe(userId, activityCode) {
+  if (!userId) return;
+  try {
+    await con.promise().query(
+      "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)",
+      [userId, activityCode]
+    );
+  } catch (err) {
+    console.error(`Failed to insert user_log activity_code=${activityCode} for user=${userId}:`, err.message);
+  }
+}
+
+async function runDockerCleanupForUser({ userId, question, framework }) {
+  if (!userId || !question || !framework) {
+    throw new Error("Missing userId, question, or framework for Docker cleanup");
+  }
+
+  const shScriptPath = path.join(__dirname, "cleanup-docker.sh");
+  const psScriptPath = path.join(__dirname, "cleanup-docker.ps1");
+
+  const command = process.platform === "win32"
+    ? `powershell.exe -ExecutionPolicy Bypass -File "${psScriptPath}" "${question}" "${framework}" "${userId}"`
+    : `bash "${shScriptPath}" "${question}" "${framework}" "${userId}"`;
+
+  await new Promise((resolve, reject) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        return reject(error);
+      }
+      if (stderr) {
+        console.warn(`Docker cleanup stderr for user ${userId}: ${stderr}`);
+      }
+      console.log(`✅ Docker cleanup output for user ${userId}:\n${stdout}`);
+      resolve();
+    });
+  });
+
+  await insertUserLogSafe(userId, 4);
+  await insertUserLogSafe(userId, 5);
+}
+
+async function submitFinalAssessmentInternal({ aonId, framework, outputPort, userQuestion }) {
+  if (!aonId || !framework || !userQuestion) {
+    throw new Error("Missing required fields: aonId, framework, userQuestion");
+  }
+
+  const [latestTokenRows] = await con.promise().query(
+    "SELECT submitted FROM launch_tokens WHERE aon_id = ? ORDER BY id DESC LIMIT 1",
+    [aonId]
+  );
+
+  if (latestTokenRows.length > 0 && Number(latestTokenRows[0].submitted) === 1) {
+    return {
+      alreadySubmitted: true,
+      detailedResults: null,
+      redirectUrl: null,
+    };
+  }
+
+  let results;
+
+  if (userQuestion === "a1l1q3") {
+    const { a1l1q3 } = require("./A1L1RQ03.js");
+    results = await a1l1q3(aonId, framework, outputPort);
+  } else if (userQuestion === "a1l1q2") {
+    const { a1l1q2 } = require("./A1L1RQ02.js");
+    results = await a1l1q2(aonId, framework, outputPort);
+  } else if (userQuestion === "a1l1q1") {
+    const { a1l1q1 } = require("./A1L1RQ01.js");
+    results = await a1l1q1(aonId, framework, outputPort);
+  } else {
+    throw new Error("Invalid question type");
+  }
+
+  const overallResult = calculateOverallScores(results);
+  const overallResultJson = JSON.stringify(overallResult);
+  const resultJson = JSON.stringify(results);
+
+  await con.promise().query(
+    "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)",
+    [aonId, resultJson, overallResultJson]
+  );
+
+  await con.promise().query(
+    "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE aon_id = ?",
+    [aonId]
+  );
+
+  let redirectUrl = null;
+  try {
+    const [redirectRows] = await con.promise().query(
+      "SELECT redirect_url FROM external_requests WHERE aon_id = ? AND redirect_url IS NOT NULL ORDER BY id DESC LIMIT 1",
+      [aonId]
+    );
+    if (redirectRows.length && redirectRows[0].redirect_url) {
+      redirectUrl = redirectRows[0].redirect_url;
+    }
+  } catch (e) {
+    console.error("Failed to fetch redirect_url for aonId", aonId, e.message);
+  }
+
+  const webhookPayload = {
+    userId: aonId,
+    result_data: results,
+    overall_result: overallResult,
+    timestamp: new Date().toISOString(),
+  };
+
+  try {
+    const [rows] = await con.promise().query(
+      "SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1",
+      [aonId]
+    );
+
+    if (rows.length && rows[0].results_webhook) {
+      axios.post(
+        rows[0].results_webhook,
+        webhookPayload,
+        {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Basic " + Buffer.from(`${process.env.BASIC_AUTH_USER}:${process.env.BASIC_AUTH_PASS}`).toString("base64"),
+          },
+          timeout: 5000,
+        }
+      )
+      .then(() => {
+        console.log("✅ Webhook delivered successfully for final submission");
+      })
+      .catch(err => {
+        console.error("❌ Webhook failed:", err.message);
+      });
+    }
+  } catch (e) {
+    console.error("Failed to fetch/send results_webhook for aonId", aonId, e.message);
+  }
+
+  return {
+    alreadySubmitted: false,
+    detailedResults: results,
+    redirectUrl,
+  };
+}
+
 const uploadsDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir);
@@ -253,10 +426,16 @@ const upload = multer({ storage });
       }
 
       const user = result[0]; 
+      const remainingMs = getRemainingMsFromStoredValue(user.closing_time_ms);
+      const timerEndMs = isDeadlineStored(user.closing_time_ms)
+        ? Number(user.closing_time_ms)
+        : Date.now() + remainingMs;
+
       res.json({
         id: userId,
         log_status: user.log_status,
-        closing_time_ms: user.closing_time_ms
+        closing_time_ms: remainingMs,
+        timer_end_ms: timerEndMs
       });
     });
   });
@@ -420,18 +599,6 @@ const upload = multer({ storage });
           //  res.send({"status":"inserted"})
         }
       })
-      var updateQuery = 'UPDATE cocube_user SET log_status = 3 WHERE id = ?';
-            con.query(updateQuery,[userId],(error,result)=>{
-              if(error){
-                  console.log(error)
-                  // res.send({"status":"error"})
-
-              }
-              else{
-                console.log("updated")
-                //  res.send({"status":"inserted"})
-              }
-          })
       })
 
     } catch (error) {
@@ -496,20 +663,6 @@ const upload = multer({ storage });
           //  res.send({"status":"inserted"})
         }
       })
-
-
-      var updateQuery = 'UPDATE cocube_user SET log_status = 3 WHERE id = ?';
-            con.query(updateQuery,[userId],(error,result)=>{
-              if(error){
-                  console.log(error)
-                  // res.send({"status":"error"})
-
-              }
-              else{
-                console.log("updated")
-                //  res.send({"status":"inserted"})
-              }
-          })
       })
       
 
@@ -573,19 +726,6 @@ const upload = multer({ storage });
           //  res.send({"status":"inserted"})
         }
       })
-
-      var updateQuery = 'UPDATE cocube_user SET log_status = 3 WHERE id = ?';
-            con.query(updateQuery,[userId],(error,result)=>{
-              if(error){
-                  console.log(error)
-                  // res.send({"status":"error"})
-
-              }
-              else{
-                console.log("updated")
-                //  res.send({"status":"inserted"})
-              }
-          })
       })
       
 
@@ -659,7 +799,7 @@ const upload = multer({ storage });
       const insertQuery =
         "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
 
-      con.query(insertQuery, [userId, 2], (insertError) => {
+      con.query(insertQuery, [empNo, 2], (insertError) => {
 
         if (insertError) {
           console.error("🔴 DB Insert Error:", insertError);
@@ -705,55 +845,23 @@ const upload = multer({ storage });
   });
 
   app.post('/v2/cleanup-docker', async (req, res) => {
-    const { userId } = req.body;
-  
-    // path to your shell script
-    const shScriptPath = path.join(__dirname, 'cleanup-docker.sh');
-  
-    // command to run the shell script
-    const command = `bash "${shScriptPath}" ${question} ${framework} ${userId}`;
-  
+    const { userId, question, framework } = req.body;
+
+    if (!userId || !question || !framework) {
+      return res.status(400).json({ error: 'userId, question, and framework are required' });
+    }
+
     try {
-      exec(command, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`❌ Error: ${error.message}`);
-          return res.status(500).json({ error: error.message });
-        }
-        if (stderr) {
-          console.error(`⚠️ Stderr: ${stderr}`);
-        }
-  
-        console.log(`✅ Docker Cleanup Output:\n${stdout}`);
-        res.json({ message: 'Docker environment cleaned up successfully.' });
-      });
-  
-      // logging user activities — clean as a temple ritual log 📜
-      const insert1 = "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
-      con.query(insert1, [userId, 4], (err, result) => {
-        if (err) {
-          console.error("DB Insert Error [4]:", err);
-        } else {
-          console.log("✅ Logged cleanup activity (code 4)");
-        }
-      });
-  
-      const insert2 = "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
-      con.query(insert2, [userId, 5], (err, result) => {
-        if (err) {
-          console.error("DB Insert Error [5]:", err);
-        } else {
-          console.log("✅ Logged cleanup activity (code 5)");
-        }
-      });
-  
+      await runDockerCleanupForUser({ userId, question, framework });
+      return res.json({ message: 'Docker environment cleaned up successfully.' });
     } catch (err) {
       console.error("Unexpected Error in Cleanup:", err);
-      res.status(500).json({ error: 'Failed to clean Docker.' });
+      return res.status(500).json({ error: 'Failed to clean Docker.' });
     }
   });
 
   app.post('/v2/cleanup-docker-2', async (req, res) => {
-    const { userId } = req.body;
+    const { userId, question, framework } = req.body;
   
     // Validate userId
     if (!userId) {
@@ -761,54 +869,17 @@ const upload = multer({ storage });
     }
   
     try {
-      // Insert first log entry (activity_code: 4)
-      const insertCategory1 = 'INSERT INTO user_log (userid, activity_code) VALUES (?, ?)';
-      con.query(insertCategory1, [userId, 4],(error,result)=>{
-        if(error){
-            console.log(error)
-            // res.send({"status":"error"})
-  
-        }
-        else{
-          console.log('Inserted log with activity_code 4');
-          //  res.send({"status":"inserted"})
-        }
-    });
-      
-  
-      // Insert second log entry (activity_code: 5)
-      const insertCategory2 = 'INSERT INTO user_log (userid, activity_code) VALUES (?, ?)';
-       con.query(insertCategory2, [userId, 5],(error,result)=>{
-        if(error){
-            console.log(error)
-            // res.send({"status":"error"})
-  
-        }
-        else{
-          console.log('Inserted log with activity_code 5');
-          //  res.send({"status":"inserted"})
-        }
-    });
+      if (question && framework) {
+        await runDockerCleanupForUser({ userId, question, framework });
+      } else {
+        await insertUserLogSafe(userId, 4);
+        await insertUserLogSafe(userId, 5);
+      }
 
-  //   var updateQuery = 'UPDATE cocube_user SET log_status = 0 WHERE id = ?';
-  //   con.query(updateQuery,[userId],(error,result)=>{
-  //     if(error){
-  //         console.log(error)
-  //         // res.send({"status":"error"})
-
-  //     }
-  //     else{
-  //       console.log("updated")
-  //       //  res.send({"status":"inserted"})
-  //     }
-  // });
-      
-  
-      // Send success response
-      res.status(200).json({ status: 'success', message: 'Docker cleanup completed' });
+      return res.status(200).json({ status: 'success', message: 'Docker cleanup completed' });
     } catch (err) {
       console.error('Failed to clean Docker:', err);
-      res.status(500).json({ error: 'Failed to clean Docker.' });
+      return res.status(500).json({ error: 'Failed to clean Docker.' });
     }
   });
 
@@ -1342,14 +1413,26 @@ app.get("/v2/aon/resolve", async (req, res) => {
     }
 
     try {
+      const [rows] = await con.promise().query(
+        `SELECT closing_time_ms FROM launch_tokens WHERE id = ? LIMIT 1`,
+        [launchTokenId]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ success: false, error: "Invalid launchTokenId" });
+      }
+
+      const deadlineMs = getDeadlineFromStoredValue(rows[0].closing_time_ms);
+
       await con.promise().query(
         `UPDATE launch_tokens 
          SET assessment_started = 1, 
              workspace_url = ?, 
              framework = ?,
-             log_status = 1
+             log_status = 1,
+             closing_time_ms = ?
          WHERE id = ?`,
-        [workspaceUrl || null, framework || null, launchTokenId]
+        [workspaceUrl || null, framework || null, deadlineMs, launchTokenId]
       );
 
       return res.json({ success: true, message: "Workspace started tracking updated" });
@@ -1361,21 +1444,41 @@ app.get("/v2/aon/resolve", async (req, res) => {
 
   // Pause timer and save remaining time for launch token
   app.post('/v2/aon/pause-timer/:launchTokenId/:timeLeft', (req, res) => {
-    const { launchTokenId, timeLeft } = req.params;
-    const newTimeleft = parseInt(timeLeft) * 1000;
+    const { launchTokenId } = req.params;
 
-    console.log(`⏸️ Pausing timer for launch token ${launchTokenId} with ${newTimeleft} ms left`);
+    con.query(
+      `SELECT closing_time_ms FROM launch_tokens WHERE id = ? LIMIT 1`,
+      [launchTokenId],
+      (err, rows) => {
+        if (err) {
+          console.error("❌ DB read failed:", err);
+          return res.status(500).json({ error: 'Database read failed' });
+        }
 
-    const updateQuery = `UPDATE launch_tokens SET log_status = 2, closing_time_ms = ? WHERE id = ?`;
-    con.query(updateQuery, [newTimeleft, launchTokenId], (err, result) => {
-      if (err) {
-        console.error("❌ DB update failed:", err);
-        return res.status(500).json({ error: 'Database update failed' });
+        if (!rows.length) {
+          return res.status(404).json({ error: 'Launch token not found' });
+        }
+
+        const deadlineMs = getDeadlineFromStoredValue(rows[0].closing_time_ms);
+        const remainingMs = Math.max(0, deadlineMs - Date.now());
+
+        con.query(
+          `UPDATE launch_tokens SET log_status = 1, closing_time_ms = ? WHERE id = ?`,
+          [deadlineMs, launchTokenId],
+          (updateErr) => {
+            if (updateErr) {
+              console.error("❌ DB update failed:", updateErr);
+              return res.status(500).json({ error: 'Database update failed' });
+            }
+
+            return res.json({
+              message: 'Timer continues in background; no pause applied',
+              remainingMs,
+            });
+          }
+        );
       }
-
-      console.log(`✅ Updated launch token ${launchTokenId} with closing_time_ms = ${newTimeleft}`);
-      return res.json({ message: 'Timer paused and saved', remainingMs: newTimeleft });
-    });
+    );
   });
 
   // Submit final assessment and send webhook
@@ -1383,113 +1486,23 @@ app.get("/v2/aon/resolve", async (req, res) => {
     console.log('🚀 Received final submission');
     const { aonId, framework, outputPort, userQuestion } = req.body;
 
-    // console.log(`🚀 Final submission received for aonId: ${aonId}, question: ${userQuestion}`);
-    
     if (!aonId || !framework || !userQuestion) {
       return res.status(400).json({ error: 'Missing required fields: aonId, framework, userQuestion' });
     }
 
-    console.log(`🎯 Final submission for aonId: ${aonId}, question: ${userQuestion}`);
-
     try {
-      let results;
-      
-      // Run the appropriate assessment based on question
-      if (userQuestion === 'a1l1q3') {
-        const { a1l1q3 } = require('./A1L1RQ03.js');
-        results = await a1l1q3(aonId, framework, outputPort);
-      } else if (userQuestion === 'a1l1q2') {
-        const { a1l1q2 } = require('./A1L1RQ02.js');
-        results = await a1l1q2(aonId, framework, outputPort);
-      } else if (userQuestion === 'a1l1q1') {
-        const { a1l1q1 } = require('./A1L1RQ01.js');
-        results = await a1l1q1(aonId, framework, outputPort);
-      } else {
-        return res.status(400).json({ error: 'Invalid question type' });
-      }
-
-      const overallResult = calculateOverallScores(results);
-      const newOverallResult = JSON.stringify(overallResult);
-      const newresult = JSON.stringify(results);
-
-      // Insert results into database
-      const insertResults = "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)";
-      await con.promise().query(insertResults, [aonId, newresult, newOverallResult]);
-
-      // Log activity - assessment submitted
-      // const insertLog = "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
-      // await con.promise().query(insertLog, [aonId, 3]);
-
-      // Mark launch token as submitted
-      const updateLaunchToken = "UPDATE launch_tokens SET submitted = 1 WHERE aon_id = ?";
-      await con.promise().query(updateLaunchToken, [aonId]);
-
-      // Look up redirect_url for this AON id
-      let redirectUrl = null;
-      try {
-        const [redirectRows] = await con.promise().query(
-          'SELECT redirect_url FROM external_requests WHERE aon_id = ? AND redirect_url IS NOT NULL ORDER BY id DESC LIMIT 1',
-          [aonId]
-        );
-        console.log('🔗 redirect_url lookup for aonId:', aonId, '→ rows:', redirectRows);
-        if (redirectRows.length && redirectRows[0].redirect_url) {
-          redirectUrl = redirectRows[0].redirect_url;
-        }
-      } catch (e) {
-        console.error('Failed to fetch redirect_url for aonId', aonId, e.message);
-      }
-      console.log('🔗 Final redirect_url:', redirectUrl);
-
-      // Send webhook
-      const webhookPayload = {
-        userId: aonId,
-        result_data: results,
-        overall_result: overallResult,
-        timestamp: new Date().toISOString()
-      };
-console.log('📡 Preparing to send webhook with payload:', webhookPayload);
-      // Look up results_webhook for this AON id
-      let resultsWebhookUrl = null;
-      try {
-        const [rows] = await con.promise().query(
-          'SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1',
-          [aonId]
-        );
-        if (rows.length && rows[0].results_webhook) {
-          resultsWebhookUrl = rows[0].results_webhook;
-        }
-      } catch (e) {
-        console.error('Failed to fetch results_webhook for aonId', aonId, e.message);
-      }
-
-      if (resultsWebhookUrl) {
-        // Fire-and-forget webhook
-        axios.post(
-          resultsWebhookUrl,
-          webhookPayload,
-          {
-            headers: {
-              "Content-Type": "application/json",
-              'Authorization': 'Basic ' + Buffer.from(`${process.env.BASIC_AUTH_USER}:${process.env.BASIC_AUTH_PASS}`).toString('base64')
-            },
-            timeout: 5000
-          }
-        )
-        .then(() => {
-          console.log("✅ Webhook delivered successfully for final submission");
-        })
-        .catch(err => {
-          console.error("❌ Webhook failed:", err.message);
-        });
-      } else {
-        console.log('No results_webhook URL configured for aonId', aonId, '- skipping webhook call');
-      }
+      const submission = await submitFinalAssessmentInternal({
+        aonId,
+        framework,
+        outputPort,
+        userQuestion,
+      });
 
       return res.json({ 
         success: true, 
-        message: 'Assessment submitted successfully',
-        detailedResults: results,
-        redirect_url: redirectUrl 
+        message: submission.alreadySubmitted ? 'Assessment already submitted' : 'Assessment submitted successfully',
+        detailedResults: submission.detailedResults,
+        redirect_url: submission.redirectUrl 
       });
 
     } catch (error) {

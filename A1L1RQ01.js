@@ -29,7 +29,7 @@ async function a1l1q1(id,framework,outputPort) {
     baseURL = `http://localhost:${outputPort}`;
   }
 
-  console.log("naan da pudhu baseURL", baseURL);
+  console.log("This is the baseURL:", baseURL);
   const browser = await chromium.launch();
   const page = await browser.newPage();
   await page.goto(baseURL);
