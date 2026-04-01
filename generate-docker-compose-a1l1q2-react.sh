@@ -38,7 +38,7 @@ services:
 
 networks:
   my_network:
-    driver: bridge
+    external: true
 
 volumes:
   frontend-src-${EMPLOYEE_NO}:

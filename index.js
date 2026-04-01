@@ -115,7 +115,7 @@ module.exports = con;
 // });
 
 // ---------- Timer Session Logic ----------
-const DURATION = 30 * 60 * 1000; // 30 mins
+const DURATION = 3 * 60 * 1000; // 30 mins
 const EXAM_DURATION_MS = DURATION;
 const DEADLINE_EPOCH_THRESHOLD_MS = 1000000000000;
 const sessions = {}; // sessionId => { startedAt, remainingMs }
@@ -188,7 +188,7 @@ async function runDockerCleanupForUser({ userId, question, framework }) {
   await insertUserLogSafe(userId, 5);
 }
 
-async function submitFinalAssessmentInternal({ aonId, framework, outputPort, userQuestion }) {
+async function submitFinalAssessmentInternal({ aonId, framework, outputPort, userQuestion, message }) {
   if (!aonId || !framework || !userQuestion) {
     throw new Error("Missing required fields: aonId, framework, userQuestion");
   }
@@ -253,6 +253,7 @@ async function submitFinalAssessmentInternal({ aonId, framework, outputPort, use
     result_data: results,
     overall_result: overallResult,
     timestamp: new Date().toISOString(),
+    ...(message ? { message } : {}),
   };
 
   try {
@@ -1484,7 +1485,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
   // Submit final assessment and send webhook
   app.post('/v2/submit-final', async (req, res) => {
     console.log('🚀 Received final submission');
-    const { aonId, framework, outputPort, userQuestion } = req.body;
+    const { aonId, framework, outputPort, userQuestion, autoSubmit } = req.body;
 
     if (!aonId || !framework || !userQuestion) {
       return res.status(400).json({ error: 'Missing required fields: aonId, framework, userQuestion' });
@@ -1496,9 +1497,10 @@ app.get("/v2/aon/resolve", async (req, res) => {
         framework,
         outputPort,
         userQuestion,
+        message: autoSubmit ? "the user exceeded the time so submitted automatically" : undefined,
       });
 
-      return res.json({ 
+      return res.json({
         success: true, 
         message: submission.alreadySubmitted ? 'Assessment already submitted' : 'Assessment submitted successfully',
         detailedResults: submission.detailedResults,
@@ -1507,6 +1509,24 @@ app.get("/v2/aon/resolve", async (req, res) => {
 
     } catch (error) {
       console.error('Final submission error:', error);
+
+      // Check if the error is because dev server is not running
+      const isDevServerDown = error.message && (
+        error.message.includes('ERR_EMPTY_RESPONSE') ||
+        error.message.includes('ERR_CONNECTION_REFUSED') ||
+        error.message.includes('ERR_SOCKET_NOT_CONNECTED') ||
+        error.message.includes('localhost:5173') ||
+        error.message.includes('net::ERR_')
+      );
+
+      if (isDevServerDown) {
+        return res.status(200).json({
+          success: false,
+          devServerNotRunning: true,
+          message: 'Development server is not running. Please follow the guidelines to start your application before submitting.'
+        });
+      }
+
       return res.status(500).json({ error: 'Failed to submit assessment', details: error.message });
     }
   });
@@ -1667,6 +1687,265 @@ app.get("/v2/aon/resolve", async (req, res) => {
       res.status(500).json({ error: 'Failed to reset slots' });
     }
   });
+
+  // Submit when candidate did NOT run the assessment (timer expired without dev server)
+  app.post('/v2/submit-no-assessment', async (req, res) => {
+    const { aonId, message } = req.body;
+
+    if (!aonId) {
+      return res.status(400).json({ error: 'Missing required field: aonId' });
+    }
+
+    try {
+      // Check if already submitted
+      const [latestTokenRows] = await con.promise().query(
+        "SELECT submitted FROM launch_tokens WHERE aon_id = ? ORDER BY id DESC LIMIT 1",
+        [aonId]
+      );
+
+      if (latestTokenRows.length > 0 && Number(latestTokenRows[0].submitted) === 1) {
+        return res.json({ success: true, message: 'Assessment already submitted' });
+      }
+
+      // Mark as submitted
+      await con.promise().query(
+        "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE aon_id = ?",
+        [aonId]
+      );
+
+      // Get redirect URL
+      let redirectUrl = null;
+      try {
+        const [redirectRows] = await con.promise().query(
+          "SELECT redirect_url FROM external_requests WHERE aon_id = ? AND redirect_url IS NOT NULL ORDER BY id DESC LIMIT 1",
+          [aonId]
+        );
+        if (redirectRows.length && redirectRows[0].redirect_url) {
+          redirectUrl = redirectRows[0].redirect_url;
+        }
+      } catch (e) {
+        console.error("Failed to fetch redirect_url for aonId", aonId, e.message);
+      }
+
+      // Send webhook with message only (no results)
+      const webhookPayload = {
+        userId: aonId,
+        result_data: null,
+        overall_result: null,
+        message: message || "The timer has run out also candidate do not attempted the test by following the guidelines",
+        timestamp: new Date().toISOString(),
+      };
+
+      try {
+        const [rows] = await con.promise().query(
+          "SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1",
+          [aonId]
+        );
+
+        if (rows.length && rows[0].results_webhook) {
+          axios.post(
+            rows[0].results_webhook,
+            webhookPayload,
+            {
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: "Basic " + Buffer.from(`${process.env.BASIC_AUTH_USER}:${process.env.BASIC_AUTH_PASS}`).toString("base64"),
+              },
+              timeout: 5000,
+            }
+          )
+          .then(() => console.log("✅ No-assessment webhook delivered for", aonId))
+          .catch(err => console.error("❌ No-assessment webhook failed:", err.message));
+        }
+      } catch (e) {
+        console.error("Failed to send no-assessment webhook for aonId", aonId, e.message);
+      }
+
+      return res.json({
+        success: true,
+        message: 'Submitted without assessment',
+        redirect_url: redirectUrl,
+      });
+
+    } catch (error) {
+      console.error('Submit-no-assessment error:', error);
+      return res.status(500).json({ error: 'Failed to submit', details: error.message });
+    }
+  });
+
+  // ---------- CRON JOB: Clean up stale sessions every 30 minutes ----------
+  const cron = require('node-cron');
+
+  async function sendWebhookForUser(aonId, payload) {
+    try {
+      const [rows] = await con.promise().query(
+        "SELECT results_webhook FROM external_requests WHERE aon_id = ? AND results_webhook IS NOT NULL ORDER BY id DESC LIMIT 1",
+        [aonId]
+      );
+      if (rows.length && rows[0].results_webhook) {
+        await axios.post(
+          rows[0].results_webhook,
+          payload,
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: "Basic " + Buffer.from(`${process.env.BASIC_AUTH_USER}:${process.env.BASIC_AUTH_PASS}`).toString("base64"),
+            },
+            timeout: 10000,
+          }
+        );
+        console.log(`✅ Cron webhook delivered for ${aonId}`);
+      }
+    } catch (e) {
+      console.error(`❌ Cron webhook failed for ${aonId}:`, e.message);
+    }
+  }
+
+  async function getRedirectUrl(aonId) {
+    try {
+      const [redirectRows] = await con.promise().query(
+        "SELECT redirect_url FROM external_requests WHERE aon_id = ? AND redirect_url IS NOT NULL ORDER BY id DESC LIMIT 1",
+        [aonId]
+      );
+      if (redirectRows.length && redirectRows[0].redirect_url) {
+        return redirectRows[0].redirect_url;
+      }
+    } catch (e) {
+      console.error("Failed to fetch redirect_url for aonId", aonId, e.message);
+    }
+    return null;
+  }
+
+  // cron.schedule('*/2 * * * *', async () => {
+  //   console.log('🔄 [CRON] Running stale session cleanup...');
+
+  //   try {
+  //     // Find all launch_tokens where:
+  //     // - submitted = 0 (not yet submitted)
+  //     // - assessment_started = 1 (user opened the workspace)
+  //     // - closing_time_ms is a deadline that has passed (timer expired)
+  //     // - OR expires_at has passed
+  //     const [staleSessions] = await con.promise().query(
+  //       `SELECT lt.id, lt.aon_id, lt.closing_time_ms, lt.framework, lt.workspace_url,
+  //               cps.question_id, cps.docker_port, cps.frontend_port
+  //        FROM launch_tokens lt
+  //        INNER JOIN candidate_port_slots cps ON cps.id = lt.slot_id
+  //        WHERE lt.submitted = 0
+  //          AND lt.log_status != 0
+  //          AND (
+  //            (lt.closing_time_ms IS NOT NULL AND lt.closing_time_ms > 1000000000000 AND lt.closing_time_ms < ?)
+  //            OR lt.expires_at < NOW()
+  //          )`,
+  //       [Date.now()]
+  //     );
+
+  //     if (staleSessions.length === 0) {
+  //       console.log('🧹 [CRON] No stale sessions found.');
+  //       return;
+  //     }
+
+  //     console.log(`🧹 [CRON] Found ${staleSessions.length} stale session(s) to clean up.`);
+
+  //     for (const session of staleSessions) {
+  //       const { id, aon_id, framework, workspace_url, question_id, docker_port, frontend_port } = session;
+  //       console.log(`🔧 [CRON] Processing stale session for ${aon_id} (token id: ${id})`);
+
+  //       try {
+  //         // Check if user ran the dev server by trying the assessment
+  //         let results = null;
+  //         let message = '';
+  //         let assessmentRan = false;
+
+  //         if (workspace_url && framework && question_id) {
+  //           // User started the workspace - try to run assessment
+  //           try {
+  //             if (question_id === 'a1l1q1') {
+  //               results = await a1l1q1(aon_id, framework, frontend_port);
+  //             } else if (question_id === 'a1l1q2') {
+  //               results = await a1l1q2(aon_id, framework, frontend_port);
+  //             } else if (question_id === 'a1l1q3') {
+  //               results = await a1l1q3(aon_id, framework, frontend_port);
+  //             }
+  //             assessmentRan = true;
+  //             message = "the user exceeded the time so submitted automatically";
+  //           } catch (assessErr) {
+  //             // Dev server not running - user didn't run the application
+  //             console.log(`[CRON] Assessment failed for ${aon_id} (dev server likely not running): ${assessErr.message}`);
+  //             message = "The timer has run out also candidate do not attempted the test by following the guidelines";
+  //           }
+  //         } else {
+  //           // User didn't even start the workspace properly
+  //           message = "The timer has run out also candidate do not attempted the test by following the guidelines";
+  //         }
+
+  //         // Save results if assessment ran
+  //         if (assessmentRan && results) {
+  //           const overallResult = calculateOverallScores(results);
+  //           await con.promise().query(
+  //             "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)",
+  //             [aon_id, JSON.stringify(results), JSON.stringify(overallResult)]
+  //           );
+  //         }
+
+  //         // Mark as submitted
+  //         await con.promise().query(
+  //           "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE id = ?",
+  //           [id]
+  //         );
+
+  //         // Send webhook
+  //         const webhookPayload = {
+  //           userId: aon_id,
+  //           result_data: results,
+  //           overall_result: results ? calculateOverallScores(results) : null,
+  //           message: message,
+  //           timestamp: new Date().toISOString(),
+  //         };
+  //         await sendWebhookForUser(aon_id, webhookPayload);
+
+  //         // Insert activity logs
+  //         await insertUserLogSafe(aon_id, 4); // docker cleanup
+  //         await insertUserLogSafe(aon_id, 5); // logout
+
+  //         // Clean up Docker if we have the info
+  //         if (question_id && framework) {
+  //           try {
+  //             await runDockerCleanupForUser({ userId: aon_id, question: question_id, framework });
+  //             console.log(`✅ [CRON] Docker cleaned up for ${aon_id}`);
+  //           } catch (dockerErr) {
+  //             console.error(`❌ [CRON] Docker cleanup failed for ${aon_id}:`, dockerErr.message);
+  //           }
+  //         }
+
+  //         // Release the slot
+  //         try {
+  //           const [slotRows] = await con.promise().query(
+  //             "SELECT slot_id FROM launch_tokens WHERE id = ?",
+  //             [id]
+  //           );
+  //           if (slotRows.length) {
+  //             await con.promise().query(
+  //               "UPDATE candidate_port_slots SET is_utilized = 0 WHERE id = ?",
+  //               [slotRows[0].slot_id]
+  //             );
+  //             console.log(`✅ [CRON] Slot released for ${aon_id}`);
+  //           }
+  //         } catch (slotErr) {
+  //           console.error(`❌ [CRON] Slot release failed for ${aon_id}:`, slotErr.message);
+  //         }
+
+  //         console.log(`✅ [CRON] Stale session cleaned up for ${aon_id}`);
+
+  //       } catch (sessionErr) {
+  //         console.error(`❌ [CRON] Failed to process session for ${aon_id}:`, sessionErr.message);
+  //       }
+  //     }
+
+  //     console.log('🔄 [CRON] Stale session cleanup completed.');
+  //   } catch (err) {
+  //     console.error('❌ [CRON] Stale session cleanup failed:', err.message);
+  //   }
+  // });
 
 app.listen(process.env.PORT || 5000, () => { 
     console.log(`the port is running in ${process.env.PORT || 5000}`)
