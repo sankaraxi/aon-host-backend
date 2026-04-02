@@ -68,7 +68,7 @@ docker compose -f "$COMPOSE_FILE_NAME" -p a1l1q1-react-${EMPLOYEE_NO} up -d
 echo "Waiting for container to start..."
 sleep 3
 
-docker exec $CONTAINER_NAME bash -c "cat > /home/coder/project/vite.config.js << 'VITEEOF'
+docker exec $CONTAINER_NAME bash -c "cat > /home/coder/project/vite.config.js << VITEEOF
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
 
