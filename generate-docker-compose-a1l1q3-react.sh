@@ -13,7 +13,7 @@ fi
 
 # Variables
 PORT=$((8080 + USER_ID))
-CONTAINER_NAME="code-server-a1l1q3-react-${EMPLOYEE_NO}
+CONTAINER_NAME="code-server-a1l1q3-react-${EMPLOYEE_NO}"
 
 # PASSWORD="test"
 # IMAGE_NAME="krishnapriyap/merntest:latest"
