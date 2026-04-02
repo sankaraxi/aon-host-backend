@@ -26,7 +26,9 @@ async function a1l1q1(id,framework,outputPort) {
   // } 
 
   if (outputPort) {
-    baseURL = `http://localhost:${outputPort}`;
+    // baseURL = `http://localhost:${outputPort}`;
+    baseURL = `http://localhost:${outputPort}/out/${outputPort}`;
+
   }
 
   console.log("This is the baseURL:", baseURL);

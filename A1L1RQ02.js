@@ -13,7 +13,8 @@ async function a1l1q2(id, framework,outputPort) {
   let baseURL = '';
 
   if (outputPort) {
-    baseURL = `http://localhost:${outputPort}`;
+    // baseURL = `http://localhost:${outputPort}`;
+    baseURL = `http://localhost:${outputPort}/out/${outputPort}`;
     console.log('Using provided outputPort:', outputPort);
   }
 
