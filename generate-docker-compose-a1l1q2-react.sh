@@ -63,3 +63,32 @@ chmod +x "$COMPOSE_FILE_NAME"
 
 # Run Docker Compose to start the containers
 docker compose -f "$COMPOSE_FILE_NAME" -p a1l1q2-react-${EMPLOYEE_NO} up -d
+
+# Wait for container to be ready
+echo "Waiting for container to start..."
+sleep 3
+
+docker exec $CONTAINER_NAME bash -c "cat > /home/coder/project/vite.config.js << 'VITEEOF'
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react-swc'
+
+export default defineConfig({
+  base: '/out/${OUTPUT_PORT}/',
+  plugins: [react()],
+  server: {
+    host: true,
+    allowedHosts: ['assessment.kggeniuslabs.com'],
+    hmr: {
+      clientPort: 443,
+      path: '/out/${OUTPUT_PORT}/',
+    }
+  }
+})
+VITEEOF"
+
+echo "✅ vite.config.js injected for port ${OUTPUT_PORT}"
+
+# Restart Vite to pick up new config
+docker exec $CONTAINER_NAME bash -c "pkill -f vite; cd /home/coder/project && npm run dev > /dev/null 2>&1 &"
+
+echo "✅ Vite restarted with base /out/${OUTPUT_PORT}/"
