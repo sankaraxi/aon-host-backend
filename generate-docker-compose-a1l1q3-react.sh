@@ -75,18 +75,17 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
 
 export default defineConfig({
-  base: '/out/${OUTPUT_PORT}/',
+  base: '/out/${OUTPUT_PORT}',
   plugins: [react()],
   server: {
     host: true,
     allowedHosts: ['assessment.kggeniuslabs.com'],
-    hmr: {
-      clientPort: 443,
-      path: '/out/${OUTPUT_PORT}/',
-    }
   }
 })
-VITEEOF"
+VITEEOF
+
+chmod 444 /home/coder/project/vite.config.js
+"
 
 echo "✅ vite.config.js injected for port ${OUTPUT_PORT}"
 
