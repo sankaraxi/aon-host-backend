@@ -13,6 +13,8 @@ fi
 
 # Variables
 PORT=$((8080 + USER_ID))
+CONTAINER_NAME="code-server-a1l1q3-react-${EMPLOYEE_NO}
+
 # PASSWORD="test"
 # IMAGE_NAME="krishnapriyap/merntest:latest"
 
@@ -22,7 +24,7 @@ version: '3.8'
 
 services:
   code-server:
-    container_name: "code-server-a1l1q3-react-${EMPLOYEE_NO}"
+    container_name: "${CONTAINER_NAME}"
     image: "sankarkg/level-three-test:latest"
     ports:
       - "${DOCKER_PORT}:8080"
