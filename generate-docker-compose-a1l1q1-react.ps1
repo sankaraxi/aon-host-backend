@@ -49,7 +49,6 @@ services:
 networks:
   my_network:
     external: true
-    name: aon-network
 
 volumes:
   frontend-src-${EmployeeNo}:

@@ -104,6 +104,24 @@ con.getConnection((error, connection) => {
     }
 });
 
+// Startup migration: ensure single-tab enforcement columns exist
+(async () => {
+  const migrations = [
+    "ALTER TABLE launch_tokens ADD COLUMN active_tab_id VARCHAR(64) DEFAULT NULL",
+    "ALTER TABLE launch_tokens ADD COLUMN tab_heartbeat_at BIGINT UNSIGNED DEFAULT NULL"
+  ];
+  for (const sql of migrations) {
+    try {
+      await con.promise().query(sql);
+    } catch (e) {
+      if (!e.message.includes('Duplicate column name')) {
+        console.warn('Migration warning:', e.message);
+      }
+    }
+  }
+  console.log('✅ Tab enforcement columns ready');
+})();
+
 module.exports = con;
 
 // cron.schedule('*/3 * * * *', () => {
@@ -444,6 +462,21 @@ const upload = multer({ storage });
     // Assuming Express is set up
   app.get('/v2/heartbeat', (req, res) => {
     res.status(200).json({ status: 'ok' });
+  });
+
+  // Check if the candidate's dev server is reachable on the given outputPort
+  app.post('/v2/check-dev-server', async (req, res) => {
+    const { outputPort } = req.body;
+    if (!outputPort) {
+      return res.status(400).json({ running: false, error: 'outputPort is required' });
+    }
+    try {
+      await axios.get(`http://localhost:${outputPort}`, { timeout: 3000 });
+      res.json({ running: true });
+    } catch (err) {
+      // Any connection error means the server is not running
+      res.json({ running: false });
+    }
   });
   
 
@@ -1375,7 +1408,14 @@ app.get("/v2/aon/resolve", async (req, res) => {
 
         cps.question_id,
         cps.docker_port,
-        cps.frontend_port AS output_port
+        cps.frontend_port AS output_port,
+
+        (SELECT er.redirect_url
+         FROM external_requests er
+         WHERE er.aon_id = lt.aon_id
+           AND er.redirect_url IS NOT NULL
+         ORDER BY er.id DESC
+         LIMIT 1) AS redirect_url
 
       FROM launch_tokens lt
       INNER JOIN tests t
@@ -1946,6 +1986,93 @@ app.get("/v2/aon/resolve", async (req, res) => {
   //     console.error('❌ [CRON] Stale session cleanup failed:', err.message);
   //   }
   // });
+
+// ========== SINGLE TAB ENFORCEMENT ==========
+// A candidate's test link may only be active in one browser tab at a time.
+// Tabs send a heartbeat every 10s; a tab is considered closed after 25s of silence.
+
+const TAB_HEARTBEAT_TIMEOUT_MS = 60000; // 60 s — beacon releases instantly on real close
+
+// Claim the active-tab slot for a launch token
+app.post('/v2/aon/claim-tab', async (req, res) => {
+  const { launchTokenId, tabId } = req.body;
+  if (!launchTokenId || !tabId) {
+    return res.status(400).json({ error: 'launchTokenId and tabId are required' });
+  }
+  try {
+    const [rows] = await con.promise().query(
+      `SELECT submitted, active_tab_id, tab_heartbeat_at FROM launch_tokens WHERE id = ? LIMIT 1`,
+      [launchTokenId]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Launch token not found' });
+    }
+    const row = rows[0];
+    if (Number(row.submitted) === 1) {
+      return res.json({ status: 'submitted' });
+    }
+    const lastBeat = row.tab_heartbeat_at ? Number(row.tab_heartbeat_at) : 0;
+    const isStale = (Date.now() - lastBeat) > TAB_HEARTBEAT_TIMEOUT_MS;
+    if (!row.active_tab_id || isStale || row.active_tab_id === tabId) {
+      await con.promise().query(
+        `UPDATE launch_tokens SET active_tab_id = ?, tab_heartbeat_at = ? WHERE id = ?`,
+        [tabId, Date.now(), launchTokenId]
+      );
+      return res.json({ status: 'allowed' });
+    }
+    return res.json({ status: 'blocked' });
+  } catch (err) {
+    console.error('Claim tab error:', err);
+    return res.status(500).json({ error: 'Failed to claim tab' });
+  }
+});
+
+// Heartbeat — keeps the active-tab slot alive
+app.post('/v2/aon/tab-heartbeat', async (req, res) => {
+  const { launchTokenId, tabId } = req.body;
+  if (!launchTokenId || !tabId) {
+    return res.status(400).json({ error: 'launchTokenId and tabId are required' });
+  }
+  try {
+    const [rows] = await con.promise().query(
+      `SELECT active_tab_id FROM launch_tokens WHERE id = ? LIMIT 1`,
+      [launchTokenId]
+    );
+    if (!rows.length) {
+      return res.json({ status: 'not_found' });
+    }
+    if (rows[0].active_tab_id !== tabId) {
+      return res.json({ status: 'evicted' });
+    }
+    await con.promise().query(
+      `UPDATE launch_tokens SET tab_heartbeat_at = ? WHERE id = ? AND active_tab_id = ?`,
+      [Date.now(), launchTokenId, tabId]
+    );
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error('Tab heartbeat error:', err);
+    return res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Release the active-tab slot (called via sendBeacon on tab close)
+app.post('/v2/aon/release-tab', async (req, res) => {
+  const { launchTokenId, tabId } = req.body;
+  if (!launchTokenId || !tabId) {
+    return res.status(400).json({ error: 'launchTokenId and tabId are required' });
+  }
+  try {
+    await con.promise().query(
+      `UPDATE launch_tokens SET active_tab_id = NULL, tab_heartbeat_at = NULL
+       WHERE id = ? AND active_tab_id = ?`,
+      [launchTokenId, tabId]
+    );
+    return res.json({ status: 'released' });
+  } catch (err) {
+    console.error('Release tab error:', err);
+    return res.status(500).json({ error: 'Internal error' });
+  }
+});
 
 app.listen(process.env.PORT || 5000, () => { 
     console.log(`the port is running in ${process.env.PORT || 5000}`)
