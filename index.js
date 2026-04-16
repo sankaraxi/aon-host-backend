@@ -2094,6 +2094,86 @@ app.post('/v2/aon/release-tab', async (req, res) => {
   }
 });
 
+
+// New Home Page
+app.post("/v2/generate-test-link", async (req, res) => {
+  const { name, rollNumber } = req.body;
+
+  if (!name || !rollNumber) {
+    return res.status(400).json({ message: "Missing fields" });
+  }
+
+  const aon_id = `AON-${rollNumber}`;
+
+  try {
+    const response = await axios.post(
+      "https://aws-test.starsquare.in/api/v2/external/assign",
+      {
+        session_id: "AON-SESSION-LOADTEST",
+        aon_id,
+        client_id: "LOAD_TEST",
+        redirect_url: "https://cocubes.com/logout&link=0&rand=1#completed",
+        results_webhook: "https://pulpitless-seclusively-ilona.ngrok-free.dev/webhook",
+      },
+      {
+        auth: {
+          username: process.env.BASIC_AUTH_USER,
+          password: process.env.BASIC_AUTH_PASS,
+        },
+      }
+    );
+
+    const payload = response.data || {};
+    const test_link =
+      payload.test_url ||
+      payload.test_link ||
+      payload.url ||
+      payload.data?.test_url ||
+      payload.data?.test_link ||
+      payload.data?.url ||
+      null;
+
+    if (!test_link) {
+      console.warn("External API returned no test link:", payload);
+    }
+
+    con.query(
+      "INSERT INTO students (name, roll_number, aon_id, test_link) VALUES (?, ?, ?, ?)",
+      [name, rollNumber, aon_id, test_link],
+      (err) => {
+        if (err) {
+          console.error("DB insert error:", err);
+          if (err.code === "ER_DUP_ENTRY") {
+            return res.status(400).json({
+              message: "Roll number already exists",
+            });
+          }
+          return res.status(500).json({
+            message: "Database error",
+            details: err.message,
+          });
+        }
+
+        res.json({ aon_id, test_link, api_response: payload });
+      }
+    );
+
+  } catch (error) {
+    console.error("Generate test link failed:", error.response?.data || error.message || error);
+    res.status(500).json({
+      message: "API failed",
+      details: error.response?.data || error.message || "Unknown error",
+    });
+  }
+});
+
+// Admin API
+app.get("/v2/admin/students", (req, res) => {
+  con.query("SELECT * FROM students ORDER BY created_at DESC", (err, data) => {
+    res.json(data);
+  });
+});
+
 app.listen(process.env.PORT || 5000, () => { 
     console.log(`the port is running in ${process.env.PORT || 5000}`)
 })
