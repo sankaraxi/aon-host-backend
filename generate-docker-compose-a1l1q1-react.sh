@@ -78,7 +78,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: true,
-    allowedHosts: ['assessment.kggeniuslabs.com'],
+    allowedHosts: ['aws-test.starsquare.in', 'assessment.kggeniuslabs.com'],
   }
 })
 VITEEOF
