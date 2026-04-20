@@ -1944,136 +1944,136 @@ app.get("/v2/aon/resolve", async (req, res) => {
     return null;
   }
 
-  // cron.schedule('*/30 * * * *', async () => {
-  //   console.log('🔄 [CRON] Running stale session cleanup...');
+  cron.schedule('*/30 * * * *', async () => {
+    console.log('🔄 [CRON] Running stale session cleanup...');
 
-  //   try {
-  //     // Find all launch_tokens where:
-  //     // - submitted = 0 (not yet submitted)
-  //     // - assessment_started = 1 (user opened the workspace)
-  //     // - closing_time_ms is a deadline that has passed (timer expired)
-  //     // - OR expires_at has passed
-  //     const [staleSessions] = await con.promise().query(
-  //       `SELECT lt.id, lt.aon_id, lt.closing_time_ms, lt.framework, lt.workspace_url,
-  //               cps.question_id, cps.docker_port, cps.frontend_port
-  //        FROM launch_tokens lt
-  //        INNER JOIN candidate_port_slots cps ON cps.id = lt.slot_id
-  //        WHERE lt.submitted = 0
-  //          AND lt.log_status != 0
-  //          AND (
-  //            (lt.closing_time_ms IS NOT NULL AND lt.closing_time_ms > 1000000000000 AND lt.closing_time_ms < ?)
-  //            OR lt.expires_at < NOW()
-  //          )`,
-  //       [Date.now()]
-  //     );
+    try {
+      // Find all launch_tokens where:
+      // - submitted = 0 (not yet submitted)
+      // - assessment_started = 1 (user opened the workspace)
+      // - closing_time_ms is a deadline that has passed (timer expired)
+      // - OR expires_at has passed
+      const [staleSessions] = await con.promise().query(
+        `SELECT lt.id, lt.aon_id, lt.closing_time_ms, lt.framework, lt.workspace_url,
+                cps.question_id, cps.docker_port, cps.frontend_port
+         FROM launch_tokens lt
+         INNER JOIN candidate_port_slots cps ON cps.id = lt.slot_id
+         WHERE lt.submitted = 0
+           AND lt.log_status != 0
+           AND (
+             (lt.closing_time_ms IS NOT NULL AND lt.closing_time_ms > 1000000000000 AND lt.closing_time_ms < ?)
+             OR lt.expires_at < NOW()
+           )`,
+        [Date.now()]
+      );
 
-  //     if (staleSessions.length === 0) {
-  //       console.log('🧹 [CRON] No stale sessions found.');
-  //       return;
-  //     }
+      if (staleSessions.length === 0) {
+        console.log('🧹 [CRON] No stale sessions found.');
+        return;
+      }
 
-  //     console.log(`🧹 [CRON] Found ${staleSessions.length} stale session(s) to clean up.`);
+      console.log(`🧹 [CRON] Found ${staleSessions.length} stale session(s) to clean up.`);
 
-  //     for (const session of staleSessions) {
-  //       const { id, aon_id, framework, workspace_url, question_id, docker_port, frontend_port } = session;
-  //       console.log(`🔧 [CRON] Processing stale session for ${aon_id} (token id: ${id})`);
+      for (const session of staleSessions) {
+        const { id, aon_id, framework, workspace_url, question_id, docker_port, frontend_port } = session;
+        console.log(`🔧 [CRON] Processing stale session for ${aon_id} (token id: ${id})`);
 
-  //       try {
-  //         // Check if user ran the dev server by trying the assessment
-  //         let results = null;
-  //         let message = '';
-  //         let assessmentRan = false;
+        try {
+          // Check if user ran the dev server by trying the assessment
+          let results = null;
+          let message = '';
+          let assessmentRan = false;
 
-  //         if (workspace_url && framework && question_id) {
-  //           // User started the workspace - try to run assessment
-  //           try {
-  //             if (question_id === 'a1l1q1') {
-  //               results = await a1l1q1(aon_id, framework, frontend_port);
-  //             } else if (question_id === 'a1l1q2') {
-  //               results = await a1l1q2(aon_id, framework, frontend_port);
-  //             } else if (question_id === 'a1l1q3') {
-  //               results = await a1l1q3(aon_id, framework, frontend_port);
-  //             }
-  //             assessmentRan = true;
-  //             message = "the user exceeded the time so submitted automatically";
-  //           } catch (assessErr) {
-  //             // Dev server not running - user didn't run the application
-  //             console.log(`[CRON] Assessment failed for ${aon_id} (dev server likely not running): ${assessErr.message}`);
-  //             message = "The timer has run out also candidate do not attempted the test by following the guidelines";
-  //           }
-  //         } else {
-  //           // User didn't even start the workspace properly
-  //           message = "The timer has run out also candidate do not attempted the test by following the guidelines";
-  //         }
+          if (workspace_url && framework && question_id) {
+            // User started the workspace - try to run assessment
+            try {
+              if (question_id === 'a1l1q1') {
+                results = await a1l1q1(aon_id, framework, frontend_port);
+              } else if (question_id === 'a1l1q2') {
+                results = await a1l1q2(aon_id, framework, frontend_port);
+              } else if (question_id === 'a1l1q3') {
+                results = await a1l1q3(aon_id, framework, frontend_port);
+              }
+              assessmentRan = true;
+              message = "the user exceeded the time so submitted automatically";
+            } catch (assessErr) {
+              // Dev server not running - user didn't run the application
+              console.log(`[CRON] Assessment failed for ${aon_id} (dev server likely not running): ${assessErr.message}`);
+              message = "The timer has run out also candidate do not attempted the test by following the guidelines";
+            }
+          } else {
+            // User didn't even start the workspace properly
+            message = "The timer has run out also candidate do not attempted the test by following the guidelines";
+          }
 
-  //         // Save results if assessment ran
-  //         if (assessmentRan && results) {
-  //           const overallResult = calculateOverallScores(results);
-  //           await con.promise().query(
-  //             "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)",
-  //             [aon_id, JSON.stringify(results), JSON.stringify(overallResult)]
-  //           );
-  //         }
+          // Save results if assessment ran
+          if (assessmentRan && results) {
+            const overallResult = calculateOverallScores(results);
+            await con.promise().query(
+              "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)",
+              [aon_id, JSON.stringify(results), JSON.stringify(overallResult)]
+            );
+          }
 
-  //         // Mark as submitted
-  //         await con.promise().query(
-  //           "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE id = ?",
-  //           [id]
-  //         );
+          // Mark as submitted
+          await con.promise().query(
+            "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE id = ?",
+            [id]
+          );
 
-  //         // Send webhook
-  //         const webhookPayload = {
-  //           userId: aon_id,
-  //           result_data: results,
-  //           overall_result: results ? calculateOverallScores(results) : null,
-  //           message: message,
-  //           timestamp: new Date().toISOString(),
-  //         };
-  //         await sendWebhookForUser(aon_id, webhookPayload);
+          // Send webhook
+          const webhookPayload = {
+            userId: aon_id,
+            result_data: results,
+            overall_result: results ? calculateOverallScores(results) : null,
+            message: message,
+            timestamp: new Date().toISOString(),
+          };
+          await sendWebhookForUser(aon_id, webhookPayload);
 
-  //         // Insert activity logs
-  //         await insertUserLogSafe(aon_id, 4); // docker cleanup
-  //         await insertUserLogSafe(aon_id, 5); // logout
+          // Insert activity logs
+          await insertUserLogSafe(aon_id, 4); // docker cleanup
+          await insertUserLogSafe(aon_id, 5); // logout
 
-  //         // Clean up Docker if we have the info
-  //         if (question_id && framework) {
-  //           try {
-  //             await runDockerCleanupForUser({ userId: aon_id, question: question_id, framework });
-  //             console.log(`✅ [CRON] Docker cleaned up for ${aon_id}`);
-  //           } catch (dockerErr) {
-  //             console.error(`❌ [CRON] Docker cleanup failed for ${aon_id}:`, dockerErr.message);
-  //           }
-  //         }
+          // Clean up Docker if we have the info
+          if (question_id && framework) {
+            try {
+              await runDockerCleanupForUser({ userId: aon_id, question: question_id, framework });
+              console.log(`✅ [CRON] Docker cleaned up for ${aon_id}`);
+            } catch (dockerErr) {
+              console.error(`❌ [CRON] Docker cleanup failed for ${aon_id}:`, dockerErr.message);
+            }
+          }
 
-  //         // Release the slot
-  //         try {
-  //           const [slotRows] = await con.promise().query(
-  //             "SELECT slot_id FROM launch_tokens WHERE id = ?",
-  //             [id]
-  //           );
-  //           if (slotRows.length) {
-  //             await con.promise().query(
-  //               "UPDATE candidate_port_slots SET is_utilized = 0 WHERE id = ?",
-  //               [slotRows[0].slot_id]
-  //             );
-  //             console.log(`✅ [CRON] Slot released for ${aon_id}`);
-  //           }
-  //         } catch (slotErr) {
-  //           console.error(`❌ [CRON] Slot release failed for ${aon_id}:`, slotErr.message);
-  //         }
+          // Release the slot
+          try {
+            const [slotRows] = await con.promise().query(
+              "SELECT slot_id FROM launch_tokens WHERE id = ?",
+              [id]
+            );
+            if (slotRows.length) {
+              await con.promise().query(
+                "UPDATE candidate_port_slots SET is_utilized = 0 WHERE id = ?",
+                [slotRows[0].slot_id]
+              );
+              console.log(`✅ [CRON] Slot released for ${aon_id}`);
+            }
+          } catch (slotErr) {
+            console.error(`❌ [CRON] Slot release failed for ${aon_id}:`, slotErr.message);
+          }
 
-  //         console.log(`✅ [CRON] Stale session cleaned up for ${aon_id}`);
+          console.log(`✅ [CRON] Stale session cleaned up for ${aon_id}`);
 
-  //       } catch (sessionErr) {
-  //         console.error(`❌ [CRON] Failed to process session for ${aon_id}:`, sessionErr.message);
-  //       }
-  //     }
+        } catch (sessionErr) {
+          console.error(`❌ [CRON] Failed to process session for ${aon_id}:`, sessionErr.message);
+        }
+      }
 
-  //     console.log('🔄 [CRON] Stale session cleanup completed.');
-  //   } catch (err) {
-  //     console.error('❌ [CRON] Stale session cleanup failed:', err.message);
-  //   }
-  // });
+      console.log('🔄 [CRON] Stale session cleanup completed.');
+    } catch (err) {
+      console.error('❌ [CRON] Stale session cleanup failed:', err.message);
+    }
+  });
 
 // ========== SINGLE TAB ENFORCEMENT ==========
 // A candidate's test link may only be active in one browser tab at a time.
