@@ -133,7 +133,7 @@ module.exports = con;
 // });
 
 // ---------- Timer Session Logic ----------
-const DURATION = 30 * 60 * 1000; // 30 mins
+const DURATION = 2 * 60 * 1000; // 30 mins
 const EXAM_DURATION_MS = DURATION;
 const DEADLINE_EPOCH_THRESHOLD_MS = 1000000000000;
 const sessions = {}; // sessionId => { startedAt, remainingMs }
