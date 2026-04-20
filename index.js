@@ -253,6 +253,23 @@ async function submitFinalAssessmentInternal({ aonId, framework, outputPort, use
     [aonId]
   );
 
+  // Release port_slot when test is submitted
+  try {
+    const [tokenSlot] = await con.promise().query(
+      "SELECT port_slot_id FROM launch_tokens WHERE aon_id = ? ORDER BY id DESC LIMIT 1",
+      [aonId]
+    );
+    if (tokenSlot.length && tokenSlot[0].port_slot_id) {
+      await con.promise().query(
+        "UPDATE port_slots SET is_utilized = 0 WHERE id = ?",
+        [tokenSlot[0].port_slot_id]
+      );
+      console.log(`✅ Port slot ${tokenSlot[0].port_slot_id} released for ${aonId}`);
+    }
+  } catch (e) {
+    console.error("Failed to release port_slot for aonId", aonId, e.message);
+  }
+
   let redirectUrl = null;
   try {
     const [redirectRows] = await con.promise().query(
@@ -1211,7 +1228,6 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
     }
 
     // CHECK: Reject if aon_id already has ANY launch token (submitted OR still active).
-    // This prevents re-assignment after expiry and after submission.
     try {
       const [existingTokens] = await con.promise().query(
         `SELECT lt.token, lt.expires_at, lt.submitted,
@@ -1234,7 +1250,6 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
             existing_link: token.test_link || null
           });
         }
-        // Token exists and not submitted — still active or expired-but-pending
         return res.status(409).json({ 
           error: 'Test link already assigned for this aon_id',
           message: 'A test link has already been generated for this candidate. Each aon_id can only have one active test link.',
@@ -1243,7 +1258,6 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
       }
     } catch (e) {
       console.warn('Check for existing token failed:', e.message);
-      // Continue with assignment if check fails (fail-open behavior)
     }
 
     // log request (non-blocking)
@@ -1267,17 +1281,12 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
     let connection;
 
     try {
-      // 🔑 GET SINGLE CONNECTION
       connection = await con.promise().getConnection();
       await connection.beginTransaction();
 
       // 1️⃣ pick random active test
       const [tests] = await connection.query(
-        `SELECT id, test_name
-        FROM tests
-        WHERE status = 'Active'
-        ORDER BY RAND()
-        LIMIT 1`
+        `SELECT id, test_name FROM tests WHERE status = 'Active' ORDER BY RAND() LIMIT 1`
       );
 
       if (!tests.length) {
@@ -1286,15 +1295,14 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
 
       const test = tests[0];
 
-     // 2️⃣ Build slot query based on whether client_id is provided
-      let slotQuery;
-      let slotParams = [];
+      // 2️⃣ Resolve client and pick a random question assigned to this client
+      let resolvedClientId = null;
+      let selectedQuestion = null;
+      let selectedQuestionDesc = null;
 
       if (client_id) {
-        // If client_id is provided, get slots assigned to this client
-        // First, verify the client exists
         const [clientCheck] = await connection.query(
-          `SELECT client_id, client_name FROM clients WHERE client_id = ? OR client_code = ?`,
+          `SELECT c.client_id, c.client_name, c.business_id FROM clients c WHERE c.client_id = ? OR c.client_code = ?`,
           [client_id, client_id]
         );
 
@@ -1302,62 +1310,103 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
           throw new Error(`Client not found: ${client_id}`);
         }
 
-        const resolvedClientId = clientCheck[0].client_id;
+        resolvedClientId = clientCheck[0].client_id;
+        const businessId = clientCheck[0].business_id;
         console.log(`Using client: ${clientCheck[0].client_name} (ID: ${resolvedClientId})`);
 
-        // Get slots assigned to this client that are not utilized
-        slotQuery = `
-          SELECT cps.id, cps.question_id, cps.docker_port, cps.frontend_port
-          FROM candidate_port_slots cps
-          INNER JOIN client_assignments ca ON ca.slot_id = cps.id AND ca.is_active = 1
-          WHERE cps.is_utilized = 0 AND ca.client_id = ?
-          ORDER BY RAND()
-          LIMIT 1
-          FOR UPDATE
-        `;
-        slotParams = [resolvedClientId];
+        // Check business subscription limit
+        if (businessId) {
+          const [bizRows] = await connection.query(
+            `SELECT business_name, subscription_limit, subscription_used FROM businesses WHERE business_id = ? FOR UPDATE`,
+            [businessId]
+          );
+          if (bizRows.length) {
+            const biz = bizRows[0];
+            if (biz.subscription_limit > 0 && biz.subscription_used >= biz.subscription_limit) {
+              throw new Error(`Subscription limit reached for business: ${biz.business_name}. Used ${biz.subscription_used}/${biz.subscription_limit}`);
+            }
+          }
+        }
+
+        // Pick random question assigned to this client
+        const [questions] = await connection.query(
+          `SELECT 
+              cq.question_id,
+              aq.question_name
+          FROM client_questions cq
+          JOIN assessment_questions aq 
+            ON cq.question_id = aq.question_id
+          WHERE cq.client_id = ? 
+            AND cq.is_active = 1
+          ORDER BY RAND() 
+          LIMIT 1`,
+          [resolvedClientId]  
+        );
+
+        if (!questions.length) {
+          throw new Error(`No questions assigned to client: ${client_id}. Please assign questions first.`);
+        }
+
+        selectedQuestion = questions[0].question_id;
+        selectedQuestionName = questions[0].question_name;
+        console.log(selectedQuestionName);
+        
+        
+
+
+        // Increment subscription usage
+        if (businessId) {
+          await connection.query(
+            `UPDATE businesses SET subscription_used = subscription_used + 1 WHERE business_id = ?`,
+            [businessId]
+          );
+        }
       } else {
-        // No client_id provided - use any available slot (backward compatibility)
-        slotQuery = `
-          SELECT id, question_id, docker_port, frontend_port
-          FROM candidate_port_slots
-          WHERE is_utilized = 0
-          ORDER BY RAND()
-          LIMIT 1
-          FOR UPDATE
-        `;
+        // No client_id - pick a random question from all active assessment questions
+        const [questions] = await connection.query(
+          `SELECT question_id FROM assessment_questions WHERE is_active = 1 ORDER BY RAND() LIMIT 1`
+        );
+        if (questions.length) {
+          selectedQuestion = questions[0].question_id;
+        } else {
+          selectedQuestion = 'a1l1q1'; // fallback
+        }
       }
 
-      const [slots] = await connection.query(slotQuery, slotParams);
+      const [[{ maxId }]] = await connection.query(
+        `SELECT MAX(id) as maxId FROM port_slots`
+      );
 
-      if (!slots.length) {
-        const errorMsg = client_id 
-          ? `No free slots available for client: ${client_id}. Please ensure slots are assigned to this client.`
-          : 'No free slots available';
-        throw new Error(errorMsg);
+      const randomId = Math.floor(Math.random() * maxId);
+
+      // 3️⃣ Pick a random free port_slot
+      const [portSlots] = await connection.query(
+        `SELECT id, docker_port, output_port FROM port_slots WHERE is_utilized = 0 ORDER BY RAND() LIMIT 1 FOR UPDATE`
+      );
+
+      if (!portSlots.length) {
+        throw new Error('No free port slots available');
       }
 
-      const slot = slots[0];
+      const portSlot = portSlots[0];
 
       const launchToken = generateOpaqueToken();
 
-      // 3️⃣ insert launch token
+      // 4️⃣ insert launch token with new port_slot_id and question_id
       await connection.query(
         `INSERT INTO launch_tokens
-        (token, session_id, aon_id, test_id, slot_id, expires_at)
-        VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 3 HOUR))`,
-        [launchToken, session_id, aon_id, test.id, slot.id]
+        (token, session_id, aon_id, test_id, port_slot_id, question_id, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 3 HOUR))`,
+        [launchToken, session_id, aon_id, test.id, portSlot.id, selectedQuestion]
       );
 
-      // 4️⃣ mark slot as utilized
+      // 5️⃣ mark port_slot as utilized
       await connection.query(
-        `UPDATE candidate_port_slots
-        SET is_utilized = 1
-        WHERE id = ?`,
-        [slot.id]
+        `UPDATE port_slots SET is_utilized = 1 WHERE id = ?`,
+        [portSlot.id]
       );
 
-      // 5️⃣ commit transaction
+      // 6️⃣ commit transaction
       await connection.commit();
 
       const test_link = `${process.env.TEST_LINK}/aon/start?t=${launchToken}`;
@@ -1365,17 +1414,16 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
       // non-transactional insert (safe after commit)
       await con.promise().query(
         `INSERT INTO test_assignment_users
-        (test_id, aon_id, status, session_id, test_link)
-        VALUES (?, ?, ?, ?, ?)`,
-        [test.id, aon_id, 'Assigned', session_id, test_link]
+        (test_id, aon_id, status, session_id, test_link, client_id)
+        VALUES (?, ?, ?, ?, ?, ?)`,
+        [test.id, aon_id, 'Assigned', session_id, test_link, client_id || null]
       );
 
       return res.json({
         aon_id,
         session_id,
-        test_id: test.id,
-        test_name: test.test_name,
-        test_link,
+        test_id: selectedQuestion,
+        test_name: selectedQuestionName,
         test_link,
         client_id: client_id || null
       });
@@ -1414,9 +1462,9 @@ app.get("/v2/aon/resolve", async (req, res) => {
         lt.submitted,
         t.test_name,
 
-        cps.question_id,
-        cps.docker_port,
-        cps.frontend_port AS output_port,
+        lt.question_id,
+        ps.docker_port,
+        ps.output_port,
 
         (SELECT er.redirect_url
          FROM external_requests er
@@ -1428,7 +1476,9 @@ app.get("/v2/aon/resolve", async (req, res) => {
       FROM launch_tokens lt
       INNER JOIN tests t
         ON t.id = lt.test_id
-      INNER JOIN candidate_port_slots cps
+      LEFT JOIN port_slots ps
+        ON ps.id = lt.port_slot_id
+      LEFT JOIN candidate_port_slots cps
         ON cps.id = lt.slot_id
 
       WHERE lt.token = ?
@@ -1453,6 +1503,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
   });
 
     // Track when user starts the workspace/assessment
+    
   app.post("/v2/aon/start-workspace", async (req, res) => {
     const { launchTokenId, workspaceUrl, framework } = req.body;
 
@@ -1773,6 +1824,23 @@ app.get("/v2/aon/resolve", async (req, res) => {
         [aonId]
       );
 
+      // Release port_slot when test is submitted
+      try {
+        const [tokenSlot] = await con.promise().query(
+          "SELECT port_slot_id FROM launch_tokens WHERE aon_id = ? ORDER BY id DESC LIMIT 1",
+          [aonId]
+        );
+        if (tokenSlot.length && tokenSlot[0].port_slot_id) {
+          await con.promise().query(
+            "UPDATE port_slots SET is_utilized = 0 WHERE id = ?",
+            [tokenSlot[0].port_slot_id]
+          );
+          console.log(`✅ Port slot ${tokenSlot[0].port_slot_id} released (no-assessment) for ${aonId}`);
+        }
+      } catch (e) {
+        console.error("Failed to release port_slot for aonId", aonId, e.message);
+      }
+
       // Get redirect URL
       let redirectUrl = null;
       try {
@@ -1876,136 +1944,136 @@ app.get("/v2/aon/resolve", async (req, res) => {
     return null;
   }
 
-  cron.schedule('*/30 * * * *', async () => {
-    console.log('🔄 [CRON] Running stale session cleanup...');
+  // cron.schedule('*/30 * * * *', async () => {
+  //   console.log('🔄 [CRON] Running stale session cleanup...');
 
-    try {
-      // Find all launch_tokens where:
-      // - submitted = 0 (not yet submitted)
-      // - assessment_started = 1 (user opened the workspace)
-      // - closing_time_ms is a deadline that has passed (timer expired)
-      // - OR expires_at has passed
-      const [staleSessions] = await con.promise().query(
-        `SELECT lt.id, lt.aon_id, lt.closing_time_ms, lt.framework, lt.workspace_url,
-                cps.question_id, cps.docker_port, cps.frontend_port
-         FROM launch_tokens lt
-         INNER JOIN candidate_port_slots cps ON cps.id = lt.slot_id
-         WHERE lt.submitted = 0
-           AND lt.log_status != 0
-           AND (
-             (lt.closing_time_ms IS NOT NULL AND lt.closing_time_ms > 1000000000000 AND lt.closing_time_ms < ?)
-             OR lt.expires_at < NOW()
-           )`,
-        [Date.now()]
-      );
+  //   try {
+  //     // Find all launch_tokens where:
+  //     // - submitted = 0 (not yet submitted)
+  //     // - assessment_started = 1 (user opened the workspace)
+  //     // - closing_time_ms is a deadline that has passed (timer expired)
+  //     // - OR expires_at has passed
+  //     const [staleSessions] = await con.promise().query(
+  //       `SELECT lt.id, lt.aon_id, lt.closing_time_ms, lt.framework, lt.workspace_url,
+  //               cps.question_id, cps.docker_port, cps.frontend_port
+  //        FROM launch_tokens lt
+  //        INNER JOIN candidate_port_slots cps ON cps.id = lt.slot_id
+  //        WHERE lt.submitted = 0
+  //          AND lt.log_status != 0
+  //          AND (
+  //            (lt.closing_time_ms IS NOT NULL AND lt.closing_time_ms > 1000000000000 AND lt.closing_time_ms < ?)
+  //            OR lt.expires_at < NOW()
+  //          )`,
+  //       [Date.now()]
+  //     );
 
-      if (staleSessions.length === 0) {
-        console.log('🧹 [CRON] No stale sessions found.');
-        return;
-      }
+  //     if (staleSessions.length === 0) {
+  //       console.log('🧹 [CRON] No stale sessions found.');
+  //       return;
+  //     }
 
-      console.log(`🧹 [CRON] Found ${staleSessions.length} stale session(s) to clean up.`);
+  //     console.log(`🧹 [CRON] Found ${staleSessions.length} stale session(s) to clean up.`);
 
-      for (const session of staleSessions) {
-        const { id, aon_id, framework, workspace_url, question_id, docker_port, frontend_port } = session;
-        console.log(`🔧 [CRON] Processing stale session for ${aon_id} (token id: ${id})`);
+  //     for (const session of staleSessions) {
+  //       const { id, aon_id, framework, workspace_url, question_id, docker_port, frontend_port } = session;
+  //       console.log(`🔧 [CRON] Processing stale session for ${aon_id} (token id: ${id})`);
 
-        try {
-          // Check if user ran the dev server by trying the assessment
-          let results = null;
-          let message = '';
-          let assessmentRan = false;
+  //       try {
+  //         // Check if user ran the dev server by trying the assessment
+  //         let results = null;
+  //         let message = '';
+  //         let assessmentRan = false;
 
-          if (workspace_url && framework && question_id) {
-            // User started the workspace - try to run assessment
-            try {
-              if (question_id === 'a1l1q1') {
-                results = await a1l1q1(aon_id, framework, frontend_port);
-              } else if (question_id === 'a1l1q2') {
-                results = await a1l1q2(aon_id, framework, frontend_port);
-              } else if (question_id === 'a1l1q3') {
-                results = await a1l1q3(aon_id, framework, frontend_port);
-              }
-              assessmentRan = true;
-              message = "the user exceeded the time so submitted automatically";
-            } catch (assessErr) {
-              // Dev server not running - user didn't run the application
-              console.log(`[CRON] Assessment failed for ${aon_id} (dev server likely not running): ${assessErr.message}`);
-              message = "The timer has run out also candidate do not attempted the test by following the guidelines";
-            }
-          } else {
-            // User didn't even start the workspace properly
-            message = "The timer has run out also candidate do not attempted the test by following the guidelines";
-          }
+  //         if (workspace_url && framework && question_id) {
+  //           // User started the workspace - try to run assessment
+  //           try {
+  //             if (question_id === 'a1l1q1') {
+  //               results = await a1l1q1(aon_id, framework, frontend_port);
+  //             } else if (question_id === 'a1l1q2') {
+  //               results = await a1l1q2(aon_id, framework, frontend_port);
+  //             } else if (question_id === 'a1l1q3') {
+  //               results = await a1l1q3(aon_id, framework, frontend_port);
+  //             }
+  //             assessmentRan = true;
+  //             message = "the user exceeded the time so submitted automatically";
+  //           } catch (assessErr) {
+  //             // Dev server not running - user didn't run the application
+  //             console.log(`[CRON] Assessment failed for ${aon_id} (dev server likely not running): ${assessErr.message}`);
+  //             message = "The timer has run out also candidate do not attempted the test by following the guidelines";
+  //           }
+  //         } else {
+  //           // User didn't even start the workspace properly
+  //           message = "The timer has run out also candidate do not attempted the test by following the guidelines";
+  //         }
 
-          // Save results if assessment ran
-          if (assessmentRan && results) {
-            const overallResult = calculateOverallScores(results);
-            await con.promise().query(
-              "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)",
-              [aon_id, JSON.stringify(results), JSON.stringify(overallResult)]
-            );
-          }
+  //         // Save results if assessment ran
+  //         if (assessmentRan && results) {
+  //           const overallResult = calculateOverallScores(results);
+  //           await con.promise().query(
+  //             "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)",
+  //             [aon_id, JSON.stringify(results), JSON.stringify(overallResult)]
+  //           );
+  //         }
 
-          // Mark as submitted
-          await con.promise().query(
-            "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE id = ?",
-            [id]
-          );
+  //         // Mark as submitted
+  //         await con.promise().query(
+  //           "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE id = ?",
+  //           [id]
+  //         );
 
-          // Send webhook
-          const webhookPayload = {
-            userId: aon_id,
-            result_data: results,
-            overall_result: results ? calculateOverallScores(results) : null,
-            message: message,
-            timestamp: new Date().toISOString(),
-          };
-          await sendWebhookForUser(aon_id, webhookPayload);
+  //         // Send webhook
+  //         const webhookPayload = {
+  //           userId: aon_id,
+  //           result_data: results,
+  //           overall_result: results ? calculateOverallScores(results) : null,
+  //           message: message,
+  //           timestamp: new Date().toISOString(),
+  //         };
+  //         await sendWebhookForUser(aon_id, webhookPayload);
 
-          // Insert activity logs
-          await insertUserLogSafe(aon_id, 4); // docker cleanup
-          await insertUserLogSafe(aon_id, 5); // logout
+  //         // Insert activity logs
+  //         await insertUserLogSafe(aon_id, 4); // docker cleanup
+  //         await insertUserLogSafe(aon_id, 5); // logout
 
-          // Clean up Docker if we have the info
-          if (question_id && framework) {
-            try {
-              await runDockerCleanupForUser({ userId: aon_id, question: question_id, framework });
-              console.log(`✅ [CRON] Docker cleaned up for ${aon_id}`);
-            } catch (dockerErr) {
-              console.error(`❌ [CRON] Docker cleanup failed for ${aon_id}:`, dockerErr.message);
-            }
-          }
+  //         // Clean up Docker if we have the info
+  //         if (question_id && framework) {
+  //           try {
+  //             await runDockerCleanupForUser({ userId: aon_id, question: question_id, framework });
+  //             console.log(`✅ [CRON] Docker cleaned up for ${aon_id}`);
+  //           } catch (dockerErr) {
+  //             console.error(`❌ [CRON] Docker cleanup failed for ${aon_id}:`, dockerErr.message);
+  //           }
+  //         }
 
-          // Release the slot
-          try {
-            const [slotRows] = await con.promise().query(
-              "SELECT slot_id FROM launch_tokens WHERE id = ?",
-              [id]
-            );
-            if (slotRows.length) {
-              await con.promise().query(
-                "UPDATE candidate_port_slots SET is_utilized = 0 WHERE id = ?",
-                [slotRows[0].slot_id]
-              );
-              console.log(`✅ [CRON] Slot released for ${aon_id}`);
-            }
-          } catch (slotErr) {
-            console.error(`❌ [CRON] Slot release failed for ${aon_id}:`, slotErr.message);
-          }
+  //         // Release the slot
+  //         try {
+  //           const [slotRows] = await con.promise().query(
+  //             "SELECT slot_id FROM launch_tokens WHERE id = ?",
+  //             [id]
+  //           );
+  //           if (slotRows.length) {
+  //             await con.promise().query(
+  //               "UPDATE candidate_port_slots SET is_utilized = 0 WHERE id = ?",
+  //               [slotRows[0].slot_id]
+  //             );
+  //             console.log(`✅ [CRON] Slot released for ${aon_id}`);
+  //           }
+  //         } catch (slotErr) {
+  //           console.error(`❌ [CRON] Slot release failed for ${aon_id}:`, slotErr.message);
+  //         }
 
-          console.log(`✅ [CRON] Stale session cleaned up for ${aon_id}`);
+  //         console.log(`✅ [CRON] Stale session cleaned up for ${aon_id}`);
 
-        } catch (sessionErr) {
-          console.error(`❌ [CRON] Failed to process session for ${aon_id}:`, sessionErr.message);
-        }
-      }
+  //       } catch (sessionErr) {
+  //         console.error(`❌ [CRON] Failed to process session for ${aon_id}:`, sessionErr.message);
+  //       }
+  //     }
 
-      console.log('🔄 [CRON] Stale session cleanup completed.');
-    } catch (err) {
-      console.error('❌ [CRON] Stale session cleanup failed:', err.message);
-    }
-  });
+  //     console.log('🔄 [CRON] Stale session cleanup completed.');
+  //   } catch (err) {
+  //     console.error('❌ [CRON] Stale session cleanup failed:', err.message);
+  //   }
+  // });
 
 // ========== SINGLE TAB ENFORCEMENT ==========
 // A candidate's test link may only be active in one browser tab at a time.
@@ -2172,6 +2240,296 @@ app.get("/v2/admin/students", (req, res) => {
   con.query("SELECT * FROM students ORDER BY created_at DESC", (err, data) => {
     res.json(data);
   });
+});
+
+// ========== BUSINESS MANAGEMENT (SuperAdmin) ==========
+
+// Get all businesses
+app.get('/v2/businesses', async (req, res) => {
+  try {
+    const [businesses] = await con.promise().query(
+      `SELECT b.*, 
+        (SELECT COUNT(*) FROM clients c WHERE c.business_id = b.business_id) AS client_count
+       FROM businesses b ORDER BY b.business_name`
+    );
+    res.json(businesses);
+  } catch (err) {
+    console.error('Error fetching businesses:', err);
+    res.status(500).json({ error: 'Failed to fetch businesses' });
+  }
+});
+
+// Get single business with clients
+app.get('/v2/businesses/:id', async (req, res) => {
+  try {
+    const [businesses] = await con.promise().query(
+      `SELECT * FROM businesses WHERE business_id = ?`,
+      [req.params.id]
+    );
+    if (!businesses.length) return res.status(404).json({ error: 'Business not found' });
+
+    const [clients] = await con.promise().query(
+      `SELECT c.*, 
+        (SELECT COUNT(*) FROM client_questions cq WHERE cq.client_id = c.client_id AND cq.is_active = 1) AS question_count
+       FROM clients c WHERE c.business_id = ? ORDER BY c.client_name`,
+      [req.params.id]
+    );
+
+    res.json({ ...businesses[0], clients });
+  } catch (err) {
+    console.error('Error fetching business:', err);
+    res.status(500).json({ error: 'Failed to fetch business' });
+  }
+});
+
+// Create business
+app.post('/v2/businesses', async (req, res) => {
+  const { business_name, business_code, description, subscription_limit } = req.body;
+  if (!business_name || !business_code) {
+    return res.status(400).json({ error: 'business_name and business_code are required' });
+  }
+  try {
+    const [existing] = await con.promise().query(
+      'SELECT business_id FROM businesses WHERE business_code = ?',
+      [business_code]
+    );
+    if (existing.length) return res.status(409).json({ error: 'Business code already exists' });
+
+    const [result] = await con.promise().query(
+      'INSERT INTO businesses (business_name, business_code, description, subscription_limit) VALUES (?, ?, ?, ?)',
+      [business_name, business_code, description || null, subscription_limit || 0]
+    );
+    res.status(201).json({ message: 'Business created', business_id: result.insertId });
+  } catch (err) {
+    console.error('Error creating business:', err);
+    res.status(500).json({ error: 'Failed to create business' });
+  }
+});
+
+// Update business
+app.put('/v2/businesses/:id', async (req, res) => {
+  const { business_name, description, subscription_limit } = req.body;
+  try {
+    const [result] = await con.promise().query(
+      'UPDATE businesses SET business_name = COALESCE(?, business_name), description = COALESCE(?, description), subscription_limit = COALESCE(?, subscription_limit) WHERE business_id = ?',
+      [business_name || null, description || null, subscription_limit != null ? subscription_limit : null, req.params.id]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Business not found' });
+    res.json({ message: 'Business updated' });
+  } catch (err) {
+    console.error('Error updating business:', err);
+    res.status(500).json({ error: 'Failed to update business' });
+  }
+});
+
+// Delete business
+app.delete('/v2/businesses/:id', async (req, res) => {
+  try {
+    // Unlink clients first
+    await con.promise().query('UPDATE clients SET business_id = NULL WHERE business_id = ?', [req.params.id]);
+    const [result] = await con.promise().query('DELETE FROM businesses WHERE business_id = ?', [req.params.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Business not found' });
+    res.json({ message: 'Business deleted' });
+  } catch (err) {
+    console.error('Error deleting business:', err);
+    res.status(500).json({ error: 'Failed to delete business' });
+  }
+});
+
+// ========== CLIENT QUESTIONS MANAGEMENT ==========
+
+// Get questions assigned to a client
+app.get('/v2/client-questions/:clientId', async (req, res) => {
+  try {
+    const [questions] = await con.promise().query(
+      `SELECT cq.*, aq.question_name, aq.description AS question_description
+       FROM client_questions cq
+       INNER JOIN assessment_questions aq ON aq.question_id = cq.question_id
+       WHERE cq.client_id = ? AND cq.is_active = 1`,
+      [req.params.clientId]
+    );
+    res.json(questions);
+  } catch (err) {
+    console.error('Error fetching client questions:', err);
+    res.status(500).json({ error: 'Failed to fetch client questions' });
+  }
+});
+
+// Assign questions to a client (replaces existing assignments)
+app.post('/v2/client-questions', async (req, res) => {
+  const { client_id, question_ids } = req.body;
+  if (!client_id || !Array.isArray(question_ids)) {
+    return res.status(400).json({ error: 'client_id and question_ids array are required' });
+  }
+  let connection;
+  try {
+    connection = await con.promise().getConnection();
+    await connection.beginTransaction();
+    await connection.query('DELETE FROM client_questions WHERE client_id = ?', [client_id]);
+    if (question_ids.length > 0) {
+      const values = question_ids.map(qid => [client_id, qid]);
+      await connection.query('INSERT INTO client_questions (client_id, question_id) VALUES ?', [values]);
+    }
+    await connection.commit();
+    res.json({ message: 'Questions assigned', assigned_count: question_ids.length });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error('Error assigning questions:', err);
+    res.status(500).json({ error: 'Failed to assign questions' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Get all assessment questions
+app.get('/v2/assessment-questions', async (req, res) => {
+  try {
+    const [questions] = await con.promise().query(
+      'SELECT * FROM assessment_questions WHERE is_active = 1 ORDER BY question_id'
+    );
+    res.json(questions);
+  } catch (err) {
+    console.error('Error fetching assessment questions:', err);
+    res.status(500).json({ error: 'Failed to fetch assessment questions' });
+  }
+});
+
+// ========== UPDATED CLIENTS (with business_id) ==========
+
+// Create client with business_id
+app.post('/v2/clients-v2', async (req, res) => {
+  const { client_name, client_code, description, business_id } = req.body;
+  if (!client_name || !client_code) {
+    return res.status(400).json({ error: 'client_name and client_code are required' });
+  }
+  try {
+    const [existing] = await con.promise().query('SELECT client_id FROM clients WHERE client_code = ?', [client_code]);
+    if (existing.length) return res.status(409).json({ error: 'Client code already exists' });
+    const [result] = await con.promise().query(
+      'INSERT INTO clients (client_name, client_code, description, business_id) VALUES (?, ?, ?, ?)',
+      [client_name, client_code, description || null, business_id || null]
+    );
+    res.status(201).json({ message: 'Client created', client_id: result.insertId });
+  } catch (err) {
+    console.error('Error creating client:', err);
+    res.status(500).json({ error: 'Failed to create client' });
+  }
+});
+
+// Update client business assignment
+app.put('/v2/clients/:id', async (req, res) => {
+  const { client_name, description, business_id } = req.body;
+  try {
+    await con.promise().query(
+      'UPDATE clients SET client_name = COALESCE(?, client_name), description = COALESCE(?, description), business_id = ? WHERE client_id = ?',
+      [client_name || null, description || null, business_id != null ? business_id : null, req.params.id]
+    );
+    res.json({ message: 'Client updated' });
+  } catch (err) {
+    console.error('Error updating client:', err);
+    res.status(500).json({ error: 'Failed to update client' });
+  }
+});
+
+// ========== SUPERADMIN DASHBOARD ==========
+
+app.get('/v2/superadmin/dashboard', async (req, res) => {
+  let businesses = [];
+  let portSlotStats = { total_slots: 0, utilized_slots: 0, free_slots: 0 };
+  let questionStats = [];
+  let recentAssignments = [];
+
+  try {
+    const [rows] = await con.promise().query(
+      `SELECT b.*, 
+        (SELECT COUNT(*) FROM clients c WHERE c.business_id = b.business_id) AS client_count
+       FROM businesses b ORDER BY b.business_name`
+    );
+    businesses = rows;
+  } catch (e) {
+    console.warn('businesses table not available:', e.message);
+  }
+
+  try {
+    const [rows] = await con.promise().query(
+      `SELECT 
+        COUNT(*) AS total_slots,
+        SUM(is_utilized = 1) AS utilized_slots,
+        SUM(is_utilized = 0) AS free_slots
+       FROM port_slots`
+    );
+    portSlotStats = rows[0] || portSlotStats;
+  } catch (e) {
+    // Fallback to candidate_port_slots if port_slots table doesn't exist
+    try {
+      const [rows] = await con.promise().query(
+        `SELECT 
+          COUNT(*) AS total_slots,
+          SUM(is_utilized = 1) AS utilized_slots,
+          SUM(is_utilized = 0) AS free_slots
+         FROM candidate_port_slots`
+      );
+      portSlotStats = rows[0] || portSlotStats;
+    } catch (e2) {
+      console.warn('Port slots tables not available:', e2.message);
+    }
+  }
+
+  try {
+    const [rows] = await con.promise().query(
+      `SELECT question_id, question_name FROM assessment_questions WHERE is_active = 1`
+    );
+    questionStats = rows;
+  } catch (e) {
+    console.warn('assessment_questions table not available:', e.message);
+  }
+
+  try {
+    const [rows] = await con.promise().query(
+      `SELECT tau.*, c.client_name 
+       FROM test_assignment_users tau
+       LEFT JOIN clients c ON c.client_code = tau.client_id OR c.client_id = tau.client_id
+       ORDER BY tau.id DESC LIMIT 20`
+    );
+    recentAssignments = rows;
+  } catch (e) {
+    console.warn('test_assignment_users table not available:', e.message);
+  }
+
+  res.json({
+    businesses,
+    port_slots: portSlotStats,
+    questions: questionStats,
+    recent_assignments: recentAssignments
+  });
+});
+
+// Port slots overview for SuperAdmin
+app.get('/v2/port-slots/stats', async (req, res) => {
+  try {
+    const [stats] = await con.promise().query(
+      `SELECT 
+        COUNT(*) AS total,
+        SUM(is_utilized = 1) AS utilized,
+        SUM(is_utilized = 0) AS free
+       FROM port_slots`
+    );
+    res.json(stats[0]);
+  } catch (err) {
+    console.error('Error fetching port slot stats:', err);
+    res.status(500).json({ error: 'Failed to fetch port slot stats' });
+  }
+});
+
+// Reset port slots
+app.post('/v2/port-slots/reset', async (req, res) => {
+  try {
+    await con.promise().query('UPDATE port_slots SET is_utilized = 0');
+    res.json({ message: 'All port slot utilizations reset' });
+  } catch (err) {
+    console.error('Error resetting port slots:', err);
+    res.status(500).json({ error: 'Failed to reset port slots' });
+  }
 });
 
 app.listen(process.env.PORT || 5000, () => { 
