@@ -104,22 +104,32 @@ con.getConnection((error, connection) => {
     }
 });
 
-// Startup migration: ensure single-tab enforcement columns exist
+// Startup migration: ensure single-tab enforcement columns + error_log table exist
 (async () => {
   const migrations = [
     "ALTER TABLE launch_tokens ADD COLUMN active_tab_id VARCHAR(64) DEFAULT NULL",
-    "ALTER TABLE launch_tokens ADD COLUMN tab_heartbeat_at BIGINT UNSIGNED DEFAULT NULL"
+    "ALTER TABLE launch_tokens ADD COLUMN tab_heartbeat_at BIGINT UNSIGNED DEFAULT NULL",
+    `CREATE TABLE IF NOT EXISTS error_log (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      aon_id VARCHAR(100) NOT NULL,
+      error_stage VARCHAR(100) NOT NULL,
+      error_message TEXT NOT NULL,
+      error_detail TEXT DEFAULT NULL,
+      occurred_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_error_aon_id (aon_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
   ];
   for (const sql of migrations) {
     try {
       await con.promise().query(sql);
     } catch (e) {
-      if (!e.message.includes('Duplicate column name')) {
+      if (!e.message.includes('Duplicate column name') && !e.message.includes('already exists')) {
         console.warn('Migration warning:', e.message);
       }
     }
   }
-  console.log('✅ Tab enforcement columns ready');
+  console.log('✅ Tab enforcement columns and error_log table ready');
 })();
 
 module.exports = con;
@@ -173,7 +183,19 @@ async function insertUserLogSafe(userId, activityCode) {
       [userId, activityCode]
     );
   } catch (err) {
-    console.error(`Failed to insert user_log activity_code=${activityCode} for user=${userId}:`, err.message);
+    console.error(`[${userId}] ❌ Failed to insert user_log activity_code=${activityCode}: ${err.message}`);
+  }
+}
+
+async function insertErrorLogSafe(aonId, stage, message, detail = null) {
+  if (!aonId) return;
+  try {
+    await con.promise().query(
+      "INSERT INTO error_log (aon_id, error_stage, error_message, error_detail) VALUES (?, ?, ?, ?)",
+      [String(aonId), stage, message, detail ? String(detail) : null]
+    );
+  } catch (err) {
+    console.error(`[${aonId}] ❌ Failed to insert error_log stage=${stage}: ${err.message}`);
   }
 }
 
@@ -189,21 +211,26 @@ async function runDockerCleanupForUser({ userId, question, framework }) {
     ? `powershell.exe -ExecutionPolicy Bypass -File "${psScriptPath}" "${question}" "${framework}" "${userId}"`
     : `bash "${shScriptPath}" "${question}" "${framework}" "${userId}"`;
 
+  console.log(`[${userId}] 🗑️  Docker container kill initiated — question=${question}, framework=${framework}`);
+  console.log(`[${userId}] 🔧 Executing cleanup command: ${command}`);
+
   await new Promise((resolve, reject) => {
     exec(command, (error, stdout, stderr) => {
+      if (stderr) {
+        console.warn(`[${userId}] ⚠️  Docker cleanup stderr: ${stderr.trim()}`);
+      }
       if (error) {
+        console.error(`[${userId}] ❌ Docker cleanup exec error: ${error.message}`);
+        insertErrorLogSafe(userId, 'docker_cleanup', error.message, stderr || null);
         return reject(error);
       }
-      if (stderr) {
-        console.warn(`Docker cleanup stderr for user ${userId}: ${stderr}`);
-      }
-      console.log(`✅ Docker cleanup output for user ${userId}:\n${stdout}`);
+      console.log(`[${userId}] ✅ Docker cleanup output:\n${stdout.trim()}`);
       resolve();
     });
   });
 
-  await insertUserLogSafe(userId, 4);
-  await insertUserLogSafe(userId, 5);
+  console.log(`[${userId}] 🧹 Docker container killed — logging activity code 7`);
+  await insertUserLogSafe(userId, 7); // Docker Container Killed
 }
 
 async function submitFinalAssessmentInternal({ aonId, framework, outputPort, userQuestion, message }) {
@@ -264,11 +291,15 @@ async function submitFinalAssessmentInternal({ aonId, framework, outputPort, use
         "UPDATE port_slots SET is_utilized = 0 WHERE id = ?",
         [tokenSlot[0].port_slot_id]
       );
-      console.log(`✅ Port slot ${tokenSlot[0].port_slot_id} released for ${aonId}`);
+      console.log(`[${aonId}] ✅ Port slot ${tokenSlot[0].port_slot_id} released`);
     }
   } catch (e) {
-    console.error("Failed to release port_slot for aonId", aonId, e.message);
+    console.error(`[${aonId}] ❌ Failed to release port_slot: ${e.message}`);
+    insertErrorLogSafe(aonId, 'port_slot_release', e.message);
   }
+
+  await insertUserLogSafe(aonId, 6); // Submitted the Assessment
+  console.log(`[${aonId}] 📝 Submission logged (activity code 6)`);
 
   let redirectUrl = null;
   try {
@@ -280,7 +311,8 @@ async function submitFinalAssessmentInternal({ aonId, framework, outputPort, use
       redirectUrl = redirectRows[0].redirect_url;
     }
   } catch (e) {
-    console.error("Failed to fetch redirect_url for aonId", aonId, e.message);
+    console.error(`[${aonId}] ❌ Failed to fetch redirect_url: ${e.message}`);
+    insertErrorLogSafe(aonId, 'redirect_url_fetch', e.message);
   }
 
   const webhookPayload = {
@@ -298,6 +330,7 @@ async function submitFinalAssessmentInternal({ aonId, framework, outputPort, use
     );
 
     if (rows.length && rows[0].results_webhook) {
+      console.log(`[${aonId}] 🔔 Sending results webhook...`);
       axios.post(
         rows[0].results_webhook,
         webhookPayload,
@@ -310,14 +343,16 @@ async function submitFinalAssessmentInternal({ aonId, framework, outputPort, use
         }
       )
       .then(() => {
-        console.log("✅ Webhook delivered successfully for final submission");
+        console.log(`[${aonId}] ✅ Webhook delivered successfully`);
       })
       .catch(err => {
-        console.error("❌ Webhook failed:", err.message);
+        console.error(`[${aonId}] ❌ Webhook delivery failed: ${err.message}`);
+        insertErrorLogSafe(aonId, 'webhook_delivery', err.message);
       });
     }
   } catch (e) {
-    console.error("Failed to fetch/send results_webhook for aonId", aonId, e.message);
+    console.error(`[${aonId}] ❌ Failed to fetch/send results_webhook: ${e.message}`);
+    insertErrorLogSafe(aonId, 'webhook_fetch', e.message);
   }
 
   return {
@@ -362,49 +397,30 @@ const upload = multer({ storage });
   });
 
   app.post('/v2/pause/:userId/:sessionId/:timeLeft', (req, res) => {
-    console.log("⏸️ Pause working");
   
     let sessionId;
     let timeLeft;
     let newTimeleft;
     try {
-      // sessionId = typeof req.body === 'string'
-      //   ? JSON.parse(req.body).sessionId
-      //   : req.body.sessionId;
       sessionId = req.params.sessionId;
       timeLeft = req.params.timeLeft;
       newTimeleft = timeLeft*1000;
-      console.log("timeleft",timeLeft)
-      console.log("newTimeleft",newTimeleft)
-      console.log("sessionId",sessionId)
-      console.log(`⏸️ Paused session ${sessionId} with ${newTimeleft} ms left`);
-  
-    const userId = req.params.userId;
+      const userId = req.params.userId;
+
+      console.log(`[${userId}] ⏸️ Pause — sessionId=${sessionId}, timeLeft=${newTimeleft}ms`);
   
     // Store remainingMs into DB
     const updateQuery = `UPDATE cocube_user SET log_status=2, closing_time_ms = ? WHERE id = ?`;
     con.query(updateQuery, [newTimeleft, userId], (err, result) => {
       if (err) {
-        console.error("❌ DB update failed:", err);
+        console.error(`[${userId}] ❌ Pause DB update failed: ${err.message}`);
         return res.status(500).json({ error: 'Database update failed' });
       }
   
-      console.log(`✅ Updated user ${userId} with closing_time_ms = ${newTimeleft}`);
+      console.log(`[${userId}] ✅ Paused — closing_time_ms set to ${newTimeleft}ms`);
       return res.json({ message: 'Paused and DB updated', remainingMs: newTimeleft });
     });
 
-    var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-      con.query(insertcategory,[userId , 6],(error,result)=>{
-        if(error){
-            console.log(error)
-            // res.send({"status":"error"})
-
-        }
-        else{
-          console.log("inserted")
-          //  res.send({"status":"inserted"})
-        }
-      })
     } catch {
       return res.status(400).json({ error: 'Invalid pause data' });
     }
@@ -519,21 +535,9 @@ const upload = multer({ storage });
           if(dbusername===username && dbpassword===password){
 
             if (submitted === 1) {
-              console.log("User already logged in ans submitted");
+              console.log(`[login:${id}] ⚠️  User already submitted — blocking re-login`);
               return res.send({ "status": "already_logged_in" });
             }
-            var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-            con.query(insertcategory,[id , 1],(error,result)=>{
-                if(error){
-                    console.log(error)
-                    // res.send({"status":"error"})
-
-                }
-                else{
-                  console.log("inserted")
-                  //  res.send({"status":"inserted"})
-                }
-            })
             
             const tokenPayload = { id, role, email: dbusername, name };
             const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '2h' });
@@ -550,16 +554,16 @@ const upload = multer({ storage });
               "token": token
             })
             
-            console.log("sucess",id,role, name)
+            console.log(`[login:${id}] ✅ Login success — role=${role}, name=${name}`)
           }
           else{
             res.send({"status":"invalid_user"})
-            console.log("notmatch")
+            console.log(`[login] ❌ Invalid credentials for username=${username}`)
           }
         }
         else{
           res.send({"status":"both_are_invalid"})
-          console.log("invaliald")
+          console.log(`[login] ❌ User not found: username=${username}`)
         }
       })
   })
@@ -616,59 +620,51 @@ const upload = multer({ storage });
 
   app.post('/v2/run-Assesment', async (req, res) => {
     const { userId, framework, outputPort } = req.body;
-    console.log(userId, framework)
+    console.log(`[${userId}] 🏃 Run Assessment (Q3) triggered — framework=${framework}, port=${outputPort}`);
     try {
       const results = await a1l1q3(userId,framework, outputPort);
       
       res.json({ detailedResults: results });
 
       const overallResult = calculateOverallScores(results);
-      // console.log("Overall Result:", overallResult);      
     
       var insertcategory="insert into results (userid,result_data,overall_result) values(?,?,?)"
       const newOverallResult=JSON.stringify(overallResult)
       const newresult=JSON.stringify(results)
       con.query(insertcategory,[userId , newresult, newOverallResult],(error,result)=>{
           if(error){
-              console.log(error)
-              // res.send({"status":"error"})
-
+              console.error(`[${userId}] ❌ Results insert error: ${error.message}`)
+              insertErrorLogSafe(userId, 'run_assessment_q3_save', error.message);
           }
           else{
-            console.log("inserted")
-            //  res.send({"status":"inserted"})
+            console.log(`[${userId}] ✅ Assessment Q3 results saved`);
           }
       var insertcategory2="insert into user_log (userid,activity_code)values(?,?)"
-      con.query(insertcategory2,[userId , 3],(error,result)=>{
+      con.query(insertcategory2,[userId , 5],(error,result)=>{
         if(error){
-            console.log(error)
-            // res.send({"status":"error"})
-
+            console.error(`[${userId}] ❌ user_log insert error (code 5): ${error.message}`)
         }
         else{
-          console.log("inserted")
-          //  res.send({"status":"inserted"})
+          console.log(`[${userId}] 📝 Run Assessment Clicked logged (activity code 5)`)
         }
       })
       })
 
     } catch (error) {
-      console.error('Assessment error:', error);
+      console.error(`[${userId}] ❌ Assessment Q3 error: ${error.message}`);
+      insertErrorLogSafe(userId, 'run_assessment_q3', error.message);
 
       if (
         error.message?.includes('ERR_SOCKET_NOT_CONNECTED') ||
         error.message?.includes('localhost:5173')
       ) {
         var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-        con.query(insertcategory,[userId , 3],(error,result)=>{
+        con.query(insertcategory,[userId , 5],(error,result)=>{
           if(error){
-              console.log(error)
-              // res.send({"status":"error"})
-
+              console.error(`[${userId}] ❌ user_log insert error (code 5): ${error.message}`)
           }
           else{
-            console.log("inserted")
-            //  res.send({"status":"inserted"})
+            console.log(`[${userId}] 📝 Run Assessment Clicked logged (activity code 5)`)
           }
         })
         return res.status(500).json({
@@ -682,7 +678,7 @@ const upload = multer({ storage });
 
   app.post('/v2/run-Assesment-2', async (req, res) => {
     const { userId, framework, outputPort } = req.body;
-    console.log(userId, framework)
+    console.log(`[${userId}] 🏃 Run Assessment (Q2) triggered — framework=${framework}, port=${outputPort}`);
     try {
       const results = await a1l1q2(userId,framework, outputPort);
       res.json({ detailedResults: results });
@@ -694,46 +690,39 @@ const upload = multer({ storage });
       const newresult=JSON.stringify(results)
       con.query(insertcategory,[userId , newresult, newOverallResult],(error,result)=>{
           if(error){
-              console.log(error)
-              // res.send({"status":"error"})
-
+              console.error(`[${userId}] ❌ Results insert error: ${error.message}`)
+              insertErrorLogSafe(userId, 'run_assessment_q2_save', error.message);
           }
           else{
-            console.log("inserted")
-            //  res.send({"status":"inserted"})
+            console.log(`[${userId}] ✅ Assessment Q2 results saved`);
           }
       var insertcategory2="insert into user_log (userid,activity_code)values(?,?)"
-      con.query(insertcategory2,[userId , 3],(error,result)=>{
+      con.query(insertcategory2,[userId , 5],(error,result)=>{
         if(error){
-            console.log(error)
-            // res.send({"status":"error"})
-
+            console.error(`[${userId}] ❌ user_log insert error (code 5): ${error.message}`)
         }
         else{
-          console.log("inserted")
-          //  res.send({"status":"inserted"})
+          console.log(`[${userId}] 📝 Run Assessment Clicked logged (activity code 5)`)
         }
       })
       })
       
 
     } catch (error) {
-      console.error('Assessment error:', error);
+      console.error(`[${userId}] ❌ Assessment Q2 error: ${error.message}`);
+      insertErrorLogSafe(userId, 'run_assessment_q2', error.message);
 
       if (
         error.message?.includes('ERR_SOCKET_NOT_CONNECTED') ||
         error.message?.includes('localhost:5173')
       ) {
         var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-        con.query(insertcategory,[userId , 3],(error,result)=>{
+        con.query(insertcategory,[userId , 5],(error,result)=>{
           if(error){
-              console.log(error)
-              // res.send({"status":"error"})
-
+              console.error(`[${userId}] ❌ user_log insert error (code 5): ${error.message}`)
           }
           else{
-            console.log("inserted")
-            //  res.send({"status":"inserted"})
+            console.log(`[${userId}] 📝 Run Assessment Clicked logged (activity code 5)`)
           }
         })
         return res.status(500).json({
@@ -747,7 +736,7 @@ const upload = multer({ storage });
 
   app.post('/v2/run-Assesment-1', async (req, res) => {
     const { userId, framework, outputPort } = req.body;
-    console.log(userId, framework)
+    console.log(`[${userId}] 🏃 Run Assessment (Q1) triggered — framework=${framework}, port=${outputPort}`);
     try {
       const results = await a1l1q1(userId,framework, outputPort);
       res.json({ detailedResults: results });
@@ -758,45 +747,39 @@ const upload = multer({ storage });
       const newresult=JSON.stringify(results)
       con.query(insertcategory,[userId, newresult, newOverallResult],(error,result)=>{
           if(error){
-              console.log(error)
-              // res.send({"status":"error"})
+              console.error(`[${userId}] ❌ Results insert error: ${error.message}`)
+              insertErrorLogSafe(userId, 'run_assessment_q1_save', error.message);
           }
           else{
-            console.log("inserted")
-            //res.send({"status":"inserted"})
+            console.log(`[${userId}] ✅ Assessment Q1 results saved`);
           }
       var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-      con.query(insertcategory,[userId , 3],(error,result)=>{
+      con.query(insertcategory,[userId , 5],(error,result)=>{
         if(error){
-            console.log(error)
-            // res.send({"status":"error"})
-
+            console.error(`[${userId}] ❌ user_log insert error (code 5): ${error.message}`)
         }
         else{
-          console.log("inserted")
-          //  res.send({"status":"inserted"})
+          console.log(`[${userId}] 📝 Run Assessment Clicked logged (activity code 5)`)
         }
       })
       })
       
 
     } catch (error) {
-      console.error('Assessment error:', error);
+      console.error(`[${userId}] ❌ Assessment Q1 error: ${error.message}`);
+      insertErrorLogSafe(userId, 'run_assessment_q1', error.message);
 
       if (
         error.message?.includes('ERR_SOCKET_NOT_CONNECTED') ||
         error.message?.includes('localhost:5173')
       ) {
         var insertcategory="insert into user_log (userid,activity_code)values(?,?)"
-        con.query(insertcategory,[userId , 3],(error,result)=>{
+        con.query(insertcategory,[userId , 5],(error,result)=>{
           if(error){
-              console.log(error)
-              // res.send({"status":"error"})
-
+              console.error(`[${userId}] ❌ user_log insert error (code 5): ${error.message}`)
           }
           else{
-            console.log("inserted")
-            //  res.send({"status":"inserted"})
+            console.log(`[${userId}] 📝 Run Assessment Clicked logged (activity code 5)`)
           }
         })
         return res.status(500).json({
@@ -811,6 +794,22 @@ const upload = multer({ storage });
   app.post("/v2/run-script", (req, res) => {
 
     const { userId, empNo, userName, question, framework, dockerPort, outputPort } = req.body;
+
+    const insertQuery1 =
+        "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
+
+      con.query(insertQuery1, [empNo, 2], (insertError) => {
+
+        if (insertError) {
+          console.error(`[${empNo}] 🔴 DB Insert Error (activity_code=3): ${insertError.message}`);
+          return res.status(500).json({
+            status: "error",
+            message: "Activity log insert failed"
+          });
+        }
+
+        console.log(`[${empNo}] 📝 Guidelines acknowledged and proceeded to next page (activity code 2)`);
+      });
 
     // Detect OS
     const isWindows = process.platform === "win32";
@@ -827,12 +826,16 @@ const upload = multer({ storage });
       ? `powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}" -UserID ${userId} -EmployeeNo "${empNo}" -dockerPort ${dockerPort} -outputPort ${outputPort}`
       : `bash "${scriptPath}" "${userId}" "${empNo}" "${dockerPort}" "${outputPort}"`;
 
-    console.log("🚀 Executing:", command);
+    console.log(`[${empNo}] 🐳 Docker container creation initiated — question=${question}, framework=${framework}`);
+    console.log(`[${empNo}] 📦 Docker port: ${dockerPort}, Output port: ${outputPort}`);
+    console.log(`[${empNo}] 🔧 Script path: ${scriptPath}`);
+    console.log(`[${empNo}] 🚀 Executing: ${command}`);
 
     exec(command, (error, stdout, stderr) => {
 
       if (error) {
-        console.error("❌ Script Execution Error:", error.message);
+        console.error(`[${empNo}] ❌ Docker container creation failed: ${error.message}`);
+        insertErrorLogSafe(empNo, 'docker_create', error.message, stderr || null);
         return res.status(500).json({
           status: "error",
           message: "Script execution failed",
@@ -841,26 +844,26 @@ const upload = multer({ storage });
       }
 
       if (stderr) {
-        console.warn("⚠️ Script stderr:", stderr);
+        console.warn(`[${empNo}] ⚠️  Docker create stderr: ${stderr.trim()}`);
       }
 
-      console.log("✅ Script Output:\n", stdout);
+      console.log(`[${empNo}] ✅ Docker creation output:\n${stdout.trim()}`);
 
-      // Insert log
+      // Insert log: Docker Container Created (code 3)
       const insertQuery =
         "INSERT INTO user_log (userid, activity_code) VALUES (?, ?)";
 
-      con.query(insertQuery, [empNo, 2], (insertError) => {
+      con.query(insertQuery, [empNo, 3], (insertError) => {
 
         if (insertError) {
-          console.error("🔴 DB Insert Error:", insertError);
+          console.error(`[${empNo}] 🔴 DB Insert Error (activity_code=3): ${insertError.message}`);
           return res.status(500).json({
             status: "error",
             message: "Activity log insert failed"
           });
         }
 
-        console.log("🟢 Activity log inserted");
+        console.log(`[${empNo}] 📝 Docker Container Created logged (activity code 3)`);
 
         // Update user timestamps
         const updateQuery =
@@ -872,14 +875,14 @@ const upload = multer({ storage });
         con.query(updateQuery, [issuedAt, expiresAt, userId], (updateError) => {
 
           if (updateError) {
-            console.error("🔴 DB Update Error:", updateError);
+            console.error(`[${empNo}] 🔴 DB Update Error (user timestamps): ${updateError.message}`);
             return res.status(500).json({
               status: "error",
               message: "User update failed"
             });
           }
 
-          console.log("🟢 User timestamps updated");
+          console.log(`[${empNo}] 🟢 Docker container is up and ready — user timestamps updated`);
 
           return res.status(200).json({
             status: "success",
@@ -923,8 +926,7 @@ const upload = multer({ storage });
       if (question && framework) {
         await runDockerCleanupForUser({ userId, question, framework });
       } else {
-        await insertUserLogSafe(userId, 4);
-        await insertUserLogSafe(userId, 5);
+        await insertUserLogSafe(userId, 7);
       }
 
       return res.status(200).json({ status: 'success', message: 'Docker cleanup completed' });
@@ -980,37 +982,11 @@ const upload = multer({ storage });
     }
 
     try {
-      // Insert second log entry (activity_code: 5)
-      const insertCategory2 = 'INSERT INTO user_log (userid, activity_code) VALUES (?, ?)';
-      con.query(insertCategory2, [userId, 5],(error,result)=>{
-        if(error){
-            console.log(error)
-            // res.send({"status":"error"})
-
-        }
-        else{
-          console.log('Inserted log with activity_code 5');
-          //  res.send({"status":"inserted"})
-        }
-      });
-
-      // var updateQuery = 'UPDATE cocube_user SET log_status = 0 WHERE id = ?';
-      // con.query(updateQuery,[userId],(error,result)=>{
-      //   if(error){
-      //       console.log(error)
-      //       // res.send({"status":"error"})
-
-      //   }
-      //   else{
-      //     console.log("updated")
-      //     //  res.send({"status":"inserted"})
-      //   }
-      // });
-      
+      console.log(`[logout:${userId}] 🚪 Logout request received`);
       // Send success response
       res.status(200).json({ status: 'success', message: 'logged out' });
     } catch (err) {
-      console.error('Failed to logout:', err);
+      console.error(`[logout:${userId}] ❌ Logout failed: ${err.message}`);
       res.status(500).json({ error: 'Failed to logout' });
     }
   });
@@ -1244,12 +1220,14 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
       if (existingTokens.length > 0) {
         const token = existingTokens[0];
         if (Number(token.submitted) === 1) {
+          console.warn(`[${aon_id}] ⚠️  Test link request rejected — assessment already submitted`);
           return res.status(409).json({
             error: 'Assessment already submitted for this aon_id',
             message: 'This candidate has already completed and submitted the assessment.',
             existing_link: token.test_link || null
           });
         }
+        console.warn(`[${aon_id}] ⚠️  Test link request rejected — active link already exists`);
         return res.status(409).json({ 
           error: 'Test link already assigned for this aon_id',
           message: 'A test link has already been generated for this candidate. Each aon_id can only have one active test link.',
@@ -1257,7 +1235,7 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
         });
       }
     } catch (e) {
-      console.warn('Check for existing token failed:', e.message);
+      console.warn(`[${aon_id}] ⚠️  Check for existing token failed: ${e.message}`);
     }
 
     // log request (non-blocking)
@@ -1274,8 +1252,9 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
           JSON.stringify(user_metadata || {})
         ]
       );
+      console.log(`[${aon_id}] 📥 External request recorded`);
     } catch (e) {
-      console.warn('external_requests insert failed:', e.message);
+      console.warn(`[${aon_id}] ⚠️  external_requests insert failed: ${e.message}`);
     }
 
     let connection;
@@ -1312,7 +1291,7 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
 
         resolvedClientId = clientCheck[0].client_id;
         const businessId = clientCheck[0].business_id;
-        console.log(`Using client: ${clientCheck[0].client_name} (ID: ${resolvedClientId})`);
+        console.log(`[${aon_id}] 🏢 Using client: ${clientCheck[0].client_name} (ID: ${resolvedClientId})`);
 
         // Check business subscription limit
         if (businessId) {
@@ -1349,7 +1328,7 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
 
         selectedQuestion = questions[0].question_id;
         selectedQuestionName = questions[0].question_name;
-        console.log(selectedQuestionName);
+        console.log(`[${aon_id}] 📋 Selected question: ${selectedQuestionName} (${selectedQuestion})`);
         
         
 
@@ -1419,6 +1398,10 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
         [test.id, aon_id, 'Assigned', session_id, test_link, client_id || null]
       );
 
+      // Log: Created Test Link (code 1)
+      await insertUserLogSafe(aon_id, 1);
+      console.log(`[${aon_id}] ✅ Test link created: ${test_link}`);
+
       return res.json({
         aon_id,
         session_id,
@@ -1430,7 +1413,8 @@ app.post('/v2/external/assign',basicAuth, async (req, res) => {
 
     } catch (err) {
       if (connection) await connection.rollback();
-      console.error('External assign error:', err);
+      console.error(`[${aon_id}] ❌ External assign error: ${err.message}`);
+      insertErrorLogSafe(aon_id, 'test_link_creation', err.message);
       return res.status(500).json({
         error: 'Failed to assign test',
         details: err.message
@@ -1502,6 +1486,25 @@ app.get("/v2/aon/resolve", async (req, res) => {
     });
   });
 
+  // Candidate acknowledges instructions and proceeds to the assessment
+  app.post("/v2/aon/acknowledge", async (req, res) => {
+    const { aonId } = req.body;
+
+    if (!aonId) {
+      return res.status(400).json({ success: false, error: "Missing aonId" });
+    }
+
+    try {
+      await insertUserLogSafe(aonId, 2); // Acknowledged and Proceeded
+      console.log(`[${aonId}] ✅ Candidate acknowledged and proceeded`);
+      return res.json({ success: true, message: "Acknowledgement recorded" });
+    } catch (err) {
+      console.error(`[${aonId}] ❌ Acknowledge log failed: ${err.message}`);
+      insertErrorLogSafe(aonId, 'acknowledge', err.message);
+      return res.status(500).json({ success: false, error: "Failed to record acknowledgement" });
+    }
+  });
+
     // Track when user starts the workspace/assessment
     
   app.post("/v2/aon/start-workspace", async (req, res) => {
@@ -1513,7 +1516,7 @@ app.get("/v2/aon/resolve", async (req, res) => {
 
     try {
       const [rows] = await con.promise().query(
-        `SELECT closing_time_ms FROM launch_tokens WHERE id = ? LIMIT 1`,
+        `SELECT aon_id, closing_time_ms FROM launch_tokens WHERE id = ? LIMIT 1`,
         [launchTokenId]
       );
 
@@ -1521,7 +1524,10 @@ app.get("/v2/aon/resolve", async (req, res) => {
         return res.status(404).json({ success: false, error: "Invalid launchTokenId" });
       }
 
+      const aonId = rows[0].aon_id;
       const deadlineMs = getDeadlineFromStoredValue(rows[0].closing_time_ms);
+
+      console.log(`[${aonId}] 🖥️  Workspace started — framework=${framework}, url=${workspaceUrl || 'N/A'}`);
 
       await con.promise().query(
         `UPDATE launch_tokens 
@@ -1534,9 +1540,12 @@ app.get("/v2/aon/resolve", async (req, res) => {
         [workspaceUrl || null, framework || null, deadlineMs, launchTokenId]
       );
 
+      await insertUserLogSafe(aonId, 4); // Started the Assessment
+      console.log(`[${aonId}] 📝 Assessment started logged (activity code 4)`);
+
       return res.json({ success: true, message: "Workspace started tracking updated" });
     } catch (err) {
-      console.error("Error updating workspace start:", err);
+      console.error(`[launchTokenId:${launchTokenId}] ❌ Error updating workspace start: ${err.message}`);
       return res.status(500).json({ success: false, error: "Database update failed" });
     }
   });
@@ -1944,136 +1953,136 @@ app.get("/v2/aon/resolve", async (req, res) => {
     return null;
   }
 
-  cron.schedule('*/30 * * * *', async () => {
-    console.log('🔄 [CRON] Running stale session cleanup...');
+  // cron.schedule('*/30 * * * *', async () => {
+  //   console.log('🔄 [CRON] Running stale session cleanup...');
 
-    try {
-      // Find all launch_tokens where:
-      // - submitted = 0 (not yet submitted)
-      // - assessment_started = 1 (user opened the workspace)
-      // - closing_time_ms is a deadline that has passed (timer expired)
-      // - OR expires_at has passed
-      const [staleSessions] = await con.promise().query(
-        `SELECT lt.id, lt.aon_id, lt.closing_time_ms, lt.framework, lt.workspace_url,
-                cps.question_id, cps.docker_port, cps.frontend_port
-         FROM launch_tokens lt
-         INNER JOIN candidate_port_slots cps ON cps.id = lt.slot_id
-         WHERE lt.submitted = 0
-           AND lt.log_status != 0
-           AND (
-             (lt.closing_time_ms IS NOT NULL AND lt.closing_time_ms > 1000000000000 AND lt.closing_time_ms < ?)
-             OR lt.expires_at < NOW()
-           )`,
-        [Date.now()]
-      );
+  //   try {
+  //     // Find all launch_tokens where:
+  //     // - submitted = 0 (not yet submitted)
+  //     // - assessment_started = 1 (user opened the workspace)
+  //     // - closing_time_ms is a deadline that has passed (timer expired)
+  //     // - OR expires_at has passed
+  //     const [staleSessions] = await con.promise().query(
+  //       `SELECT lt.id, lt.aon_id, lt.closing_time_ms, lt.framework, lt.workspace_url,
+  //               cps.question_id, cps.docker_port, cps.frontend_port
+  //        FROM launch_tokens lt
+  //        INNER JOIN candidate_port_slots cps ON cps.id = lt.slot_id
+  //        WHERE lt.submitted = 0
+  //          AND lt.log_status != 0
+  //          AND (
+  //            (lt.closing_time_ms IS NOT NULL AND lt.closing_time_ms > 1000000000000 AND lt.closing_time_ms < ?)
+  //            OR lt.expires_at < NOW()
+  //          )`,
+  //       [Date.now()]
+  //     );
 
-      if (staleSessions.length === 0) {
-        console.log('🧹 [CRON] No stale sessions found.');
-        return;
-      }
+  //     if (staleSessions.length === 0) {
+  //       console.log('🧹 [CRON] No stale sessions found.');
+  //       return;
+  //     }
 
-      console.log(`🧹 [CRON] Found ${staleSessions.length} stale session(s) to clean up.`);
+  //     console.log(`🧹 [CRON] Found ${staleSessions.length} stale session(s) to clean up.`);
 
-      for (const session of staleSessions) {
-        const { id, aon_id, framework, workspace_url, question_id, docker_port, frontend_port } = session;
-        console.log(`🔧 [CRON] Processing stale session for ${aon_id} (token id: ${id})`);
+  //     for (const session of staleSessions) {
+  //       const { id, aon_id, framework, workspace_url, question_id, docker_port, frontend_port } = session;
+  //       console.log(`🔧 [CRON] Processing stale session for ${aon_id} (token id: ${id})`);
 
-        try {
-          // Check if user ran the dev server by trying the assessment
-          let results = null;
-          let message = '';
-          let assessmentRan = false;
+  //       try {
+  //         // Check if user ran the dev server by trying the assessment
+  //         let results = null;
+  //         let message = '';
+  //         let assessmentRan = false;
 
-          if (workspace_url && framework && question_id) {
-            // User started the workspace - try to run assessment
-            try {
-              if (question_id === 'a1l1q1') {
-                results = await a1l1q1(aon_id, framework, frontend_port);
-              } else if (question_id === 'a1l1q2') {
-                results = await a1l1q2(aon_id, framework, frontend_port);
-              } else if (question_id === 'a1l1q3') {
-                results = await a1l1q3(aon_id, framework, frontend_port);
-              }
-              assessmentRan = true;
-              message = "the user exceeded the time so submitted automatically";
-            } catch (assessErr) {
-              // Dev server not running - user didn't run the application
-              console.log(`[CRON] Assessment failed for ${aon_id} (dev server likely not running): ${assessErr.message}`);
-              message = "The timer has run out also candidate do not attempted the test by following the guidelines";
-            }
-          } else {
-            // User didn't even start the workspace properly
-            message = "The timer has run out also candidate do not attempted the test by following the guidelines";
-          }
+  //         if (workspace_url && framework && question_id) {
+  //           // User started the workspace - try to run assessment
+  //           try {
+  //             if (question_id === 'a1l1q1') {
+  //               results = await a1l1q1(aon_id, framework, frontend_port);
+  //             } else if (question_id === 'a1l1q2') {
+  //               results = await a1l1q2(aon_id, framework, frontend_port);
+  //             } else if (question_id === 'a1l1q3') {
+  //               results = await a1l1q3(aon_id, framework, frontend_port);
+  //             }
+  //             assessmentRan = true;
+  //             message = "the user exceeded the time so submitted automatically";
+  //           } catch (assessErr) {
+  //             // Dev server not running - user didn't run the application
+  //             console.log(`[CRON] Assessment failed for ${aon_id} (dev server likely not running): ${assessErr.message}`);
+  //             message = "The timer has run out also candidate do not attempted the test by following the guidelines";
+  //           }
+  //         } else {
+  //           // User didn't even start the workspace properly
+  //           message = "The timer has run out also candidate do not attempted the test by following the guidelines";
+  //         }
 
-          // Save results if assessment ran
-          if (assessmentRan && results) {
-            const overallResult = calculateOverallScores(results);
-            await con.promise().query(
-              "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)",
-              [aon_id, JSON.stringify(results), JSON.stringify(overallResult)]
-            );
-          }
+  //         // Save results if assessment ran
+  //         if (assessmentRan && results) {
+  //           const overallResult = calculateOverallScores(results);
+  //           await con.promise().query(
+  //             "INSERT INTO results (userid, result_data, overall_result) VALUES (?, ?, ?)",
+  //             [aon_id, JSON.stringify(results), JSON.stringify(overallResult)]
+  //           );
+  //         }
 
-          // Mark as submitted
-          await con.promise().query(
-            "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE id = ?",
-            [id]
-          );
+  //         // Mark as submitted
+  //         await con.promise().query(
+  //           "UPDATE launch_tokens SET submitted = 1, log_status = 0, closing_time_ms = 0 WHERE id = ?",
+  //           [id]
+  //         );
 
-          // Send webhook
-          const webhookPayload = {
-            userId: aon_id,
-            result_data: results,
-            overall_result: results ? calculateOverallScores(results) : null,
-            message: message,
-            timestamp: new Date().toISOString(),
-          };
-          await sendWebhookForUser(aon_id, webhookPayload);
+  //         // Send webhook
+  //         const webhookPayload = {
+  //           userId: aon_id,
+  //           result_data: results,
+  //           overall_result: results ? calculateOverallScores(results) : null,
+  //           message: message,
+  //           timestamp: new Date().toISOString(),
+  //         };
+  //         await sendWebhookForUser(aon_id, webhookPayload);
 
-          // Insert activity logs
-          await insertUserLogSafe(aon_id, 4); // docker cleanup
-          await insertUserLogSafe(aon_id, 5); // logout
+  //         // Insert activity logs
+  //         await insertUserLogSafe(aon_id, 4); // docker cleanup
+  //         await insertUserLogSafe(aon_id, 5); // logout
 
-          // Clean up Docker if we have the info
-          if (question_id && framework) {
-            try {
-              await runDockerCleanupForUser({ userId: aon_id, question: question_id, framework });
-              console.log(`✅ [CRON] Docker cleaned up for ${aon_id}`);
-            } catch (dockerErr) {
-              console.error(`❌ [CRON] Docker cleanup failed for ${aon_id}:`, dockerErr.message);
-            }
-          }
+  //         // Clean up Docker if we have the info
+  //         if (question_id && framework) {
+  //           try {
+  //             await runDockerCleanupForUser({ userId: aon_id, question: question_id, framework });
+  //             console.log(`✅ [CRON] Docker cleaned up for ${aon_id}`);
+  //           } catch (dockerErr) {
+  //             console.error(`❌ [CRON] Docker cleanup failed for ${aon_id}:`, dockerErr.message);
+  //           }
+  //         }
 
-          // Release the slot
-          try {
-            const [slotRows] = await con.promise().query(
-              "SELECT slot_id FROM launch_tokens WHERE id = ?",
-              [id]
-            );
-            if (slotRows.length) {
-              await con.promise().query(
-                "UPDATE candidate_port_slots SET is_utilized = 0 WHERE id = ?",
-                [slotRows[0].slot_id]
-              );
-              console.log(`✅ [CRON] Slot released for ${aon_id}`);
-            }
-          } catch (slotErr) {
-            console.error(`❌ [CRON] Slot release failed for ${aon_id}:`, slotErr.message);
-          }
+  //         // Release the slot
+  //         try {
+  //           const [slotRows] = await con.promise().query(
+  //             "SELECT slot_id FROM launch_tokens WHERE id = ?",
+  //             [id]
+  //           );
+  //           if (slotRows.length) {
+  //             await con.promise().query(
+  //               "UPDATE candidate_port_slots SET is_utilized = 0 WHERE id = ?",
+  //               [slotRows[0].slot_id]
+  //             );
+  //             console.log(`✅ [CRON] Slot released for ${aon_id}`);
+  //           }
+  //         } catch (slotErr) {
+  //           console.error(`❌ [CRON] Slot release failed for ${aon_id}:`, slotErr.message);
+  //         }
 
-          console.log(`✅ [CRON] Stale session cleaned up for ${aon_id}`);
+  //         console.log(`✅ [CRON] Stale session cleaned up for ${aon_id}`);
 
-        } catch (sessionErr) {
-          console.error(`❌ [CRON] Failed to process session for ${aon_id}:`, sessionErr.message);
-        }
-      }
+  //       } catch (sessionErr) {
+  //         console.error(`❌ [CRON] Failed to process session for ${aon_id}:`, sessionErr.message);
+  //       }
+  //     }
 
-      console.log('🔄 [CRON] Stale session cleanup completed.');
-    } catch (err) {
-      console.error('❌ [CRON] Stale session cleanup failed:', err.message);
-    }
-  });
+  //     console.log('🔄 [CRON] Stale session cleanup completed.');
+  //   } catch (err) {
+  //     console.error('❌ [CRON] Stale session cleanup failed:', err.message);
+  //   }
+  // });
 
 // ========== SINGLE TAB ENFORCEMENT ==========
 // A candidate's test link may only be active in one browser tab at a time.

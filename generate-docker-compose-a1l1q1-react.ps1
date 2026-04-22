@@ -12,7 +12,7 @@ if (-not $EmployeeNo) {
 }
 
 # Variables
-$Port = 8080 + $UserID
+# $Port = 8080 + $UserID
 # $Password = "test"
 # $ImageName = "krishnapriyap/merntest:latest"
 
@@ -61,7 +61,8 @@ volumes:
 
 
 # Debug: Print the calculated port
-Write-Host "Calculated Port for Aon ID ${EmployeeNo}: ${Port}"
+Write-Host "Calculated Docker Port for Aon ID ${EmployeeNo}: ${dockerPort}"
+Write-Host "Calculated Output Port for Aon ID ${EmployeeNo}: ${outputPort}"
 
 # Debug: Print the Docker Compose file content
 Write-Host "Docker Compose Content:"

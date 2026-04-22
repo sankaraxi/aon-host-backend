@@ -15,17 +15,18 @@ fi
 containerName="code-server-${question}-${framework}-${userId}"
 imageName="sankarkg/${question}-${framework}"
 
-echo "🧹 Attempting to clean up Docker environment..."
-echo "Target container: $containerName"
-echo "Target image: $imageName"
+echo "$userId : 🗑️  Starting Docker cleanup..."
+echo "$userId : 🎯 Target container: $containerName"
+echo "$userId : 🖼️  Target image: $imageName"
 
 # Stop and remove the container if it exists
 containerId=$(docker ps -a -q --filter "name=$containerName")
 if [ -n "$containerId" ]; then
+  echo "$userId : 🔧 Stopping and removing container: $containerName"
   docker rm -f "$containerId" >/dev/null
-  echo "✅ Removed container: $containerName"
+  echo "$userId : ✅ Container removed: $containerName"
 else
-  echo "⚠️  No container found with name: $containerName"
+  echo "$userId : ⚠️  No container found with name: $containerName"
 fi
 
 # # Remove the Docker image if it exists
@@ -41,4 +42,4 @@ fi
 # docker volume prune -f
 # docker network prune -f
 
-echo "✨ Docker cleanup script completed."
+echo "$userId : 🧹 Docker cleanup completed."

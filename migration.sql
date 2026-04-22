@@ -105,3 +105,30 @@ SELECT DISTINCT ca.client_id, cps.question_id
 FROM `client_assignments` ca
 INNER JOIN `candidate_port_slots` cps ON cps.id = ca.slot_id
 WHERE ca.is_active = 1;
+
+-- ============================================================
+-- MIGRATION: Restructure log_master + Add error_log table
+-- ============================================================
+
+-- 9. Restructure log_master with new 7-code activity scheme
+TRUNCATE TABLE `log_master`;
+INSERT INTO `log_master` (`activity_code`, `activity`) VALUES
+  (1, 'Created Test Link'),
+  (2, 'Acknowledged and Proceeded'),
+  (3, 'Docker Container Created'),
+  (4, 'Started the Assessment'),
+  (5, 'Run Assessment Clicked'),
+  (6, 'Submitted the Assessment'),
+  (7, 'Docker Container Killed');
+
+-- 10. CREATE error_log TABLE to capture runtime errors from link creation to submission
+CREATE TABLE IF NOT EXISTS `error_log` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `aon_id` VARCHAR(100) NOT NULL,
+  `error_stage` VARCHAR(100) NOT NULL,
+  `error_message` TEXT NOT NULL,
+  `error_detail` TEXT DEFAULT NULL,
+  `occurred_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_error_aon_id` (`aon_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

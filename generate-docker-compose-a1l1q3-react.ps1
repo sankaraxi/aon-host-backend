@@ -65,7 +65,9 @@ volumes:
 
 
 # Debug: Print the calculated port
-Write-Host "Calculated Port for Aon ID ${EmployeeNo}: ${Port}"
+Write-Host "Calculated Docker Port for Aon ID ${EmployeeNo}: ${dockerPort}"
+Write-Host "Calculated Output Port for Aon ID ${EmployeeNo}: ${outputPort}"
+
 
 # Debug: Print the Docker Compose file content
 Write-Host "Docker Compose Content:"

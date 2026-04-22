@@ -50,7 +50,8 @@ EOF
 )
 
 # Debug: Print the calculated port
-echo "Calculated Port for Aon ID ${EMPLOYEE_NO}: ${PORT}"
+echo "Calculated Docker Port for Aon ID ${EMPLOYEE_NO}: ${DOCKER_PORT}"
+echo "Calculated Output Port for Aon ID ${EMPLOYEE_NO}: ${OUTPUT_PORT}"
 
 # Debug: Print the Docker Compose file content
 echo "Docker Compose Content:"
