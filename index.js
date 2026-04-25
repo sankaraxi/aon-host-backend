@@ -2236,10 +2236,38 @@ app.post("/v2/generate-test-link", async (req, res) => {
     );
 
   } catch (error) {
-    console.error("Generate test link failed:", error.response?.data || error.message || error);
+    const status = error.response?.status;
+    const errData = error.response?.data || {};
+
+    // If aon_id already has a link, fetch and return it instead of erroring
+    if (status === 409) {
+      const existingLink = errData.existing_link || null;
+      if (existingLink) {
+        console.log(`[${aon_id}] ℹ️  Returning existing test link`);
+        return res.json({ aon_id, test_link: existingLink, already_existed: true });
+      }
+      // Fallback: look up from students table
+      try {
+        const [rows] = await con.promise().query(
+          `SELECT test_link FROM students WHERE aon_id = ? LIMIT 1`,
+          [aon_id]
+        );
+        if (rows.length && rows[0].test_link) {
+          console.log(`[${aon_id}] ℹ️  Returning existing test link from DB`);
+          return res.json({ aon_id, test_link: rows[0].test_link, already_existed: true });
+        }
+      } catch (dbErr) {
+        console.error(`[${aon_id}] DB lookup failed:`, dbErr.message);
+      }
+      return res.status(409).json({
+        message: errData.message || "A test link already exists for this roll number.",
+      });
+    }
+
+    console.error(`Generate test link failed [${status || 'no-response'}]:`, errData || error.message);
     res.status(500).json({
-      message: "API failed",
-      details: error.response?.data || error.message || "Unknown error",
+      message: "Failed to generate test link. Please try again.",
+      details: errData.message || error.message || "Unknown error",
     });
   }
 });
